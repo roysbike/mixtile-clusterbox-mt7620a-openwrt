@@ -1,0 +1,143 @@
+#!/bin/sh
+# rpcd backend for luci-app-nodectl.
+
+. /usr/share/libubox/jshn.sh
+
+NODECTL=/bin/nodectl
+TOKEN_DIR=/var/run/nodectl/tokens
+TOKEN_TTL=60
+SSH_KEY=/root/.ssh/id_dropbear
+
+reply() {
+	json_init
+	json_add_int code "$1"
+	json_add_string output "$2"
+	json_dump
+}
+
+run() {
+	local out rc
+	out=$("$NODECTL" "$@" 2>&1)
+	rc=$?
+	reply "$rc" "$out"
+}
+
+node_args() {
+	case "$1" in
+		0) echo "--all" ;;
+		1|2|3|4) echo "-n $1" ;;
+		*) return 1 ;;
+	esac
+}
+
+new_token() {
+	local tok now f exp
+
+	mkdir -p "$TOKEN_DIR" && chmod 700 "$TOKEN_DIR"
+	now=$(date +%s)
+	for f in "$TOKEN_DIR"/*; do
+		[ -f "$f" ] || continue
+		read -r _ _ exp < "$f"
+		[ "${exp:-0}" -lt "$now" ] && rm -f "$f"
+	done
+	tok=$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom)
+	echo "$1 $2 $((now + TOKEN_TTL))" > "$TOKEN_DIR/$tok"
+	echo "$tok"
+}
+
+case "$1" in
+list)
+	cat <<-'EOF'
+	{
+		"status": {},
+		"action": { "node": 1, "action": "poweron", "force": false, "hard": false },
+		"rescan": {},
+		"console": { "node": 1, "mode": "serial" },
+		"flash": { "node": 1, "source": "", "target": "", "reboot": true },
+		"log": { "node": 1 },
+		"leases": {},
+		"pubkey": {}
+	}
+	EOF
+	;;
+call)
+	read -r input
+	[ -n "$input" ] || input='{}'
+	json_load "$input"
+
+	case "$2" in
+	status)
+		"$NODECTL" status --json 2>/dev/null || echo '{"nodes":[]}'
+		;;
+	action)
+		json_get_vars node action force hard
+		sel=$(node_args "$node") || { reply 2 "invalid node"; exit 0; }
+		case "$action" in
+			poweron|poweroff|reset)
+				run "$action" $sel ;;
+			shutdown|reboot)
+				set -- "$action" $sel --bg
+				[ "$force" = 1 ] && set -- "$@" --force
+				[ "$hard" = 1 ] && set -- "$@" --hard
+				run "$@" ;;
+			*)
+				reply 2 "invalid action" ;;
+		esac
+		;;
+	rescan)
+		run rescan
+		;;
+	console)
+		json_get_vars node mode
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$mode" in serial|ssh) ;; *) reply 2 "invalid mode"; exit 0 ;; esac
+		json_init
+		json_add_string token "$(new_token "$mode" "$node")"
+		json_add_int port "$(uci -q get ttyd.nodectl.port || echo 7682)"
+		json_dump
+		;;
+	flash)
+		json_get_vars node source target reboot
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$source" in
+			/*|http://*|https://*) ;;
+			*) reply 2 "source must be an absolute path or an http(s) URL"; exit 0 ;;
+		esac
+		set -- flash -n "$node" -f "$source" -y --bg
+		[ -n "$target" ] && set -- "$@" --target "$target"
+		[ "$reboot" = 0 ] && set -- "$@" --no-reboot
+		run "$@"
+		;;
+	log)
+		json_get_vars node
+		case "$node" in 1|2|3|4) f=/var/log/nodectl/node$node.log ;; *) f=/var/log/nodectl/all.log ;; esac
+		json_init
+		json_add_string log "$(tail -c 8192 "$f" 2>/dev/null)"
+		json_dump
+		;;
+	leases)
+		json_init
+		json_add_array leases
+		[ -f /tmp/dhcp.leases ] && while read -r _ mac ip name _; do
+			json_add_object
+			json_add_string mac "$mac"
+			json_add_string ipaddr "$ip"
+			json_add_string hostname "$name"
+			json_close_object
+		done < /tmp/dhcp.leases
+		json_close_array
+		json_dump
+		;;
+	pubkey)
+		if [ ! -f "$SSH_KEY" ]; then
+			mkdir -p /root/.ssh && chmod 700 /root/.ssh
+			dropbearkey -t ed25519 -f "$SSH_KEY" >/dev/null 2>&1 ||
+				dropbearkey -t rsa -s 2048 -f "$SSH_KEY" >/dev/null 2>&1
+		fi
+		json_init
+		json_add_string pubkey "$(dropbearkey -y -f "$SSH_KEY" 2>/dev/null | grep -E '^(ssh-|ecdsa-)')"
+		json_dump
+		;;
+	esac
+	;;
+esac

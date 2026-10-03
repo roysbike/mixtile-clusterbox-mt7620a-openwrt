@@ -1,0 +1,17 @@
+{
+	"luci-app-nodectl": {
+		"description": "Grant access to Blade3 node control",
+		"read": {
+			"ubus": {
+				"nodectl": [ "status", "log", "leases", "pubkey" ]
+			},
+			"uci": [ "nodectl" ]
+		},
+		"write": {
+			"ubus": {
+				"nodectl": [ "action", "rescan", "console", "flash" ]
+			},
+			"uci": [ "nodectl" ]
+		}
+	}
+}

@@ -25,20 +25,4 @@ define Package/$(PKG_NAME)/install
 	cp -rfp $(PKG_BUILD_DIR)/files/* $(1)/
 endef
 
-define Package/$(PKG_NAME)/postinst
-#!/bin/sh
-if [ -z "$${IPKG_INSTROOT}" ]; then
-	/etc/init.d/blade3-boot enable
-fi
-exit 0
-endef
-
-define Package/$(PKG_NAME)/prerm
-#!/bin/sh
-if [ -z "$${IPKG_INSTROOT}" ]; then
-	/etc/init.d/blade3-boot disable
-fi
-exit 0
-endef
-
 $(eval $(call BuildPackage,custom-files))

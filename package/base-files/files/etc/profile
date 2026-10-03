@@ -22,12 +22,12 @@ _nodectl()
     local cur=${COMP_WORDS[COMP_CWORD]};
     local cmd=${COMP_WORDS[COMP_CWORD-1]};
     if [[ "$cmd" == *nodectl ]];then
-        COMPREPLY=( $(compgen -W 'list poweron poweroff reboot flash console rescan' -- $cur) )
+        COMPREPLY=( $(compgen -W 'status list poweron poweroff shutdown reboot reset flash console ssh rescan' -- $cur) )
 	else
 		case $cmd in
-			'poweron'|'poweroff'|'reboot'|'flash')
+			'status'|'poweron'|'poweroff'|'shutdown'|'reboot')
 				COMPREPLY=( $(compgen -W '--all -n' -- $cur) ) ;;
-			'console')
+			'reset'|'flash'|'console'|'ssh')
 				COMPREPLY=( $(compgen -W '-n' -- $cur) ) ;;
 			'-f')
 				COMPREPLY=( $( compgen -A file )) ;;

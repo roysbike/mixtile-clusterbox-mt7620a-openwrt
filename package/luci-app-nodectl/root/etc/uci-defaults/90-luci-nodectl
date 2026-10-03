@@ -1,0 +1,17 @@
+#!/bin/sh
+# ttyd instance serving node consoles; access is gated by one-time tokens.
+
+uci -q get ttyd.nodectl >/dev/null || {
+	uci -q batch <<-EOF
+		set ttyd.nodectl=ttyd
+		set ttyd.nodectl.port='7682'
+		set ttyd.nodectl.url_arg='1'
+		set ttyd.nodectl.max_clients='8'
+		set ttyd.nodectl.terminal_type='xterm-256color'
+		set ttyd.nodectl.command='/usr/libexec/nodectl/term'
+		commit ttyd
+	EOF
+}
+
+rm -f /tmp/luci-indexcache*
+exit 0
