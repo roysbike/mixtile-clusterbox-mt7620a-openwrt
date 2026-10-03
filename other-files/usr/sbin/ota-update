@@ -4,7 +4,7 @@
 # Date-based version check (YYYYMMDD) + SHA256 verification via GitHub API asset digest
 # Foreground download (BusyBox ash kills bg processes on script exit)
 
-GITHUB_REPO="mixtile-rockchip/mixtile-clusterbox-mt7620a-openwrt"
+GITHUB_REPO="roysbike/mixtile-clusterbox-mt7620a-openwrt"
 API_RELEASES="https://api.github.com/repos/$GITHUB_REPO/releases"
 VERSION_FILE="/etc/openwrt_release"
 
