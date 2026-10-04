@@ -28,6 +28,15 @@
 		}
 	},
 
+	"admin/cluster/rescue": {
+		"title": "Rescue / PXE",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "nodectl/rescue"
+		}
+	},
+
 	"admin/cluster/settings": {
 		"title": "Settings",
 		"order": 30,

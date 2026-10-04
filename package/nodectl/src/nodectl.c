@@ -714,6 +714,16 @@ static int fan_get(void)
 	return period > 0 ? (int)(duty * 100 / period) : -1;
 }
 
+/* SoC junction temp in millidegC, or -1 if this kernel has no thermal zone. */
+static int chassis_temp_mc(void)
+{
+	char buf[32];
+
+	if (read_file("/sys/class/thermal/thermal_zone0/temp", buf, sizeof(buf)))
+		return -1;
+	return atoi(buf);
+}
+
 static int cmd_status(struct opts *o)
 {
 	pid_t pids[NODES + 1];
@@ -773,9 +783,16 @@ static int cmd_status(struct opts *o)
 		first = 0;
 	}
 	if (o->json) {
-		printf("],\"chassis\":{\"ext_power\":%s,\"fan_duty\":%d},\"gpio_base\":%d}\n",
+		int temp = chassis_temp_mc();
+
+		printf("],\"chassis\":{\"ext_power\":%s,\"fan_duty\":%d,\"temp_mc\":",
 		       read_file(EXT_POWER_VALUE, ext, sizeof(ext)) ? "null" :
-		       ext[0] == '1' ? "true" : "false", fan_get(), gpio_base);
+		       ext[0] == '1' ? "true" : "false", fan_get());
+		if (temp < 0)
+			printf("null");
+		else
+			printf("%d", temp);
+		printf("},\"gpio_base\":%d}\n", gpio_base);
 	}
 	return EXIT_OK;
 }

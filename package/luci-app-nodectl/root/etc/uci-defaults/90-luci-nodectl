@@ -1,6 +1,10 @@
 #!/bin/sh
 # ttyd instance serving node consoles; access is gated by one-time tokens.
 
+# LuCI Terminal iframes this host:7681. Bind to all addresses so it works
+# from WAN (192.168.70.x) as well as LAN, not only br-lan.
+uci -q delete ttyd.@ttyd[0].interface
+
 uci -q get ttyd.nodectl >/dev/null || {
 	uci -q batch <<-EOF
 		set ttyd.nodectl=ttyd
@@ -12,6 +16,20 @@ uci -q get ttyd.nodectl >/dev/null || {
 		commit ttyd
 	EOF
 }
+
+mkdir -p /opt/pxe /var/run/node-exporter
+[ -e /www/pxe ] || ln -s /opt/pxe /www/pxe
+
+if [ -f /etc/config/prometheus-node-exporter-lua ]; then
+	uci -q set prometheus-node-exporter-lua.main.listen_interface='loopback'
+	uci -q set prometheus-node-exporter-lua.main.listen_port='9100'
+	uci -q commit prometheus-node-exporter-lua
+fi
+
+if [ -f /etc/config/prometheus-node-exporter-lua ] && [ -x /etc/init.d/prometheus-node-exporter-lua ]; then
+	uci -q set prometheus-node-exporter-lua.main.textfile_dir='/var/run/node-exporter'
+	uci -q commit prometheus-node-exporter-lua
+fi
 
 rm -f /tmp/luci-indexcache*
 exit 0

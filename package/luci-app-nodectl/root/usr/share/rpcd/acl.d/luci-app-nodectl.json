@@ -3,15 +3,21 @@
 		"description": "Grant access to Blade3 node control",
 		"read": {
 			"ubus": {
-				"nodectl": [ "status", "log", "console_log", "leases", "pubkey" ]
+				"nodectl": [ "status", "log", "console_log", "leases", "pubkey", "pxe" ]
 			},
-			"uci": [ "nodectl" ]
+			"file": {
+				"/opt/pxe/*": [ "read" ]
+			},
+			"uci": [ "nodectl", "dhcp" ]
 		},
 		"write": {
 			"ubus": {
-				"nodectl": [ "action", "rescan", "console", "send", "fan", "flash" ]
+				"nodectl": [ "action", "rescan", "console", "send", "fan", "flash", "pxe_delete", "pxe_enable" ]
 			},
-			"uci": [ "nodectl" ]
+			"file": {
+				"/opt/pxe/*": [ "write" ]
+			},
+			"uci": [ "nodectl", "dhcp" ]
 		}
 	}
 }

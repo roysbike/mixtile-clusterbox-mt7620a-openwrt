@@ -15,9 +15,10 @@ define Package/luci-app-teleport
 endef
 
 define Package/luci-app-teleport/description
-	Runs a Teleport agent that joins a Teleport cluster over an outbound
-	tunnel and publishes SSH, web apps, Kubernetes and databases. The
-	agent binary is installed from LuCI into /opt/teleport.
+	Optional LuCI UI to download and configure a Teleport agent. Not
+	selected in the default image: the Teleport binary is AGPL-3.0 and
+	must be installed by the operator (LuCI: Services → Teleport, or
+	the teleport-v*-mipsel GitHub release) after accepting that license.
 endef
 
 define Package/luci-app-teleport/conffiles

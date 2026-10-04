@@ -10,7 +10,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/luci-app-nodectl
 	CATEGORY:=Custom Component
 	TITLE:=LuCI interface for Blade3 node control
-	DEPENDS:=+nodectl +luci-base +rpcd +ttyd
+	DEPENDS:=+nodectl +luci-base +rpcd +rpcd-mod-file +ttyd +prometheus-node-exporter-lua
 	PKGARCH:=all
 endef
 
@@ -33,12 +33,14 @@ define Package/luci-app-nodectl/install
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/nodectl $(1)/usr/libexec/rpcd/
 	$(INSTALL_DIR) $(1)/usr/libexec/nodectl
 	$(INSTALL_BIN) ./root/usr/libexec/nodectl/term $(1)/usr/libexec/nodectl/
+	$(INSTALL_BIN) ./root/usr/libexec/nodectl/textfile $(1)/usr/libexec/nodectl/
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-nodectl.json $(1)/usr/share/rpcd/acl.d/
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/luci-app-nodectl.json $(1)/usr/share/luci/menu.d/
-	$(INSTALL_DIR) $(1)/etc/uci-defaults
+	$(INSTALL_DIR) $(1)/etc/uci-defaults $(1)/etc/init.d
 	$(INSTALL_BIN) ./root/etc/uci-defaults/90-luci-nodectl $(1)/etc/uci-defaults/
+	$(INSTALL_BIN) ./root/etc/init.d/nodectl-metrics $(1)/etc/init.d/nodectl-metrics
 endef
 
 define Package/luci-app-nodectl/postinst
