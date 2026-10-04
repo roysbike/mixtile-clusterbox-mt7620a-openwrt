@@ -4,16 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Teleport version (match the major version of your cluster)
+        description: Teleport version, or "latest" for the newest stable release
         required: true
-        default: "18.10.0"
+        default: latest
   push:
     paths:
       - scripts/build-teleport-mipsel.sh
       - .github/workflows/teleport-mipsel.yml
-
-env:
-  TELEPORT_VERSION: ${{ inputs.version || '18.10.0' }}
 
 permissions:
   contents: write
@@ -46,6 +43,16 @@ jobs:
           docker export "$id" | sudo tar -x -C /opt/muslsf
           docker rm "$id"
           /opt/muslsf/bin/gcc --version | head -1
+
+      - name: Resolve version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.version || 'latest' }}
+        run: |
+          v=$WANT
+          [ "$v" = latest ] && v=$(gh release view -R gravitational/teleport --json tagName -q .tagName)
+          echo "TELEPORT_VERSION=${v#v}" >> "$GITHUB_ENV"
+          echo "Teleport ${v#v}"
 
       - name: Build
         env:
