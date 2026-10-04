@@ -21,8 +21,13 @@ src="$WORK/teleport"
 	https://github.com/gravitational/teleport.git "$src"
 cd "$src"
 
+# Use exactly the Go release Teleport pins: some dependencies (strcase) panic
+# at start-up when built with a Go whose Unicode tables are newer.
+gover=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)
+[ -n "$gover" ] || gover=$(awk '$1 == "go" { print $2 }' go.mod)
 export GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=1 CC CXX
-export GOFLAGS=-mod=mod GOTOOLCHAIN=${GOTOOLCHAIN:-auto}
+export GOFLAGS=-mod=mod GOTOOLCHAIN=${GOTOOLCHAIN:-go$gover}
+go version
 
 # pkcs11 (HSM support of the auth service) declares a 2 GiB array type, which
 # does not fit the 32-bit MIPS address space.
