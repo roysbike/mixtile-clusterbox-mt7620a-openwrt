@@ -7,12 +7,19 @@ on:
         description: Teleport version (match the major version of your cluster)
         required: true
         default: "18.11.1"
+  push:
+    paths:
+      - scripts/build-teleport-mipsel.sh
+      - .github/workflows/teleport-mipsel.yml
+
+env:
+  TELEPORT_VERSION: ${{ inputs.version || '18.11.1' }}
 
 permissions:
   contents: write
 
 concurrency:
-  group: teleport-mipsel-${{ inputs.version }}
+  group: teleport-mipsel-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -49,14 +56,14 @@ jobs:
           WORK: ${{ runner.temp }}/teleport-build
         run: |
           mkdir -p "$WORK"
-          sh scripts/build-teleport-mipsel.sh "${{ inputs.version }}" out
+          sh scripts/build-teleport-mipsel.sh "$TELEPORT_VERSION" out
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="teleport-v${{ inputs.version }}-mipsel"
+          tag="teleport-v$TELEPORT_VERSION-mipsel"
           gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$tag" out/* --target "$GITHUB_SHA" \
-            --title "Teleport ${{ inputs.version }} agent for ClusterBox (linux/mipsel)" \
-            --notes "Static linux/mipsle softfloat build of teleport ${{ inputs.version }} for the MT7620A ClusterBox. Installed from LuCI: Services → Teleport."
+            --title "Teleport $TELEPORT_VERSION agent for ClusterBox (linux/mipsel)" \
+            --notes "Static linux/mipsle softfloat build of teleport $TELEPORT_VERSION for the MT7620A ClusterBox. Installed from LuCI: Services → Teleport."
