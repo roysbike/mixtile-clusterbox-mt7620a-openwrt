@@ -55,7 +55,7 @@ return view.extend({
 			ui.addNotification(null, E('p', {}, _('Enter an absolute path on the ClusterBox or an http(s) URL.')), 'danger');
 			return;
 		}
-		if (!info.ipaddr || !info.ping) {
+		if (!info.ipaddr || !info.reachable) {
 			ui.addNotification(null, E('p', {}, _('Node %d must be online over SSH (set its IP address in Settings).').format(node)), 'danger');
 			return;
 		}
@@ -109,7 +109,7 @@ return view.extend({
 					E('label', { 'class': 'cbi-value-title' }, _('Node')),
 					E('div', { 'class': 'cbi-value-field' }, E('select', { 'id': 'nodectl-node', 'class': 'cbi-input-select' },
 						nodes.map(function(n) {
-							return E('option', { 'value': n.id }, '#%d %s (%s)'.format(n.id, n.name, n.ping ? _('online') : _('offline')));
+							return E('option', { 'value': n.id }, '#%d %s (%s)'.format(n.id, n.name, n.reachable ? _('online') : _('offline')));
 						})))
 				]),
 				E('div', { 'class': 'cbi-value' }, [

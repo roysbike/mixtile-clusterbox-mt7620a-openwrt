@@ -72,6 +72,19 @@ return view.extend({
 		o = s.option(form.Value, 'flash_target', _('Default flash target'));
 		o.default = '/dev/mmcblk0';
 
+		o = s.option(form.Flag, 'console', _('Serial console servers'),
+			_('Keep node UARTs open, record them to /var/log/nodectl/consoleN.log and allow shared access.'));
+		o.default = '1';
+
+		o = s.option(form.Value, 'console_log_kb', _('Console log size (KiB)'),
+			_('Per node, one rotated copy is kept. Logs live in RAM.'));
+		o.datatype = 'range(16,4096)';
+		o.default = '512';
+
+		o = s.option(form.Value, 'fan_duty', _('Fan duty at boot (%)'));
+		o.datatype = 'range(0,100)';
+		o.default = '85';
+
 		s = m.section(form.TypedSection, 'node', _('Nodes'));
 		s.anonymous = false;
 		s.addremove = false;
@@ -79,11 +92,31 @@ return view.extend({
 		o = s.option(form.Value, 'name', _('Name'));
 
 		o = s.option(form.Value, 'ipaddr', _('IP address'),
-			_('Address on the pci0 network (10.20.0.0/24), used for status, SSH and flashing.'));
+			_('Node address reachable from the ClusterBox, used for status, SSH and flashing.'));
 		o.datatype = 'ip4addr';
 		leases.forEach(function(l) {
 			o.value(l.ipaddr, '%s (%s %s)'.format(l.ipaddr, l.hostname || '?', l.mac));
 		});
+
+		o = s.option(form.Value, 'check_port', _('Health check port'),
+			_('TCP port probed for the online state (50000 = Talos API, 22 = SSH); 0 uses ping.'));
+		o.datatype = 'port';
+		o.placeholder = '0';
+		o.value('50000', '50000 (Talos API)');
+		o.value('22', '22 (SSH)');
+		o.value('0', _('0 (ping)'));
+
+		o = s.option(form.Value, 'baud', _('Console baud rate'));
+		o.datatype = 'uinteger';
+		o.placeholder = '1500000';
+		[ '1500000', '115200' ].forEach(function(b) { o.value(b); });
+
+		o = s.option(form.Flag, 'console', _('Console server'));
+		o.default = '1';
+
+		o = s.option(form.Value, 'tty', _('Console device'), _('Leave empty for the default UART of this slot.'));
+		o.optional = true;
+		o.placeholder = '/dev/ttyCH343USBx';
 
 		o = s.option(form.Flag, 'autostart', _('Power on at boot'));
 		o.default = '1';

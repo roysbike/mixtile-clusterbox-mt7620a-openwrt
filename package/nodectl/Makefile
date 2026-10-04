@@ -42,6 +42,7 @@ define Package/nodectl/install
 	$(INSTALL_CONF) ./files/nodectl.config $(1)/etc/config/nodectl
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/blade3-boot.init $(1)/etc/init.d/blade3-boot
+	$(INSTALL_BIN) ./files/nodectl-console.init $(1)/etc/init.d/nodectl-console
 endef
 
 $(eval $(call BuildPackage,nodectl))

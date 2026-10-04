@@ -3,13 +3,13 @@
 		"description": "Grant access to Blade3 node control",
 		"read": {
 			"ubus": {
-				"nodectl": [ "status", "log", "leases", "pubkey" ]
+				"nodectl": [ "status", "log", "console_log", "leases", "pubkey" ]
 			},
 			"uci": [ "nodectl" ]
 		},
 		"write": {
 			"ubus": {
-				"nodectl": [ "action", "rescan", "console", "flash" ]
+				"nodectl": [ "action", "rescan", "console", "send", "fan", "flash" ]
 			},
 			"uci": [ "nodectl" ]
 		}

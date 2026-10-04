@@ -2,31 +2,43 @@
  * nodectl - power, console, status and flashing control for Mixtile Blade3
  * nodes in a Mixtile ClusterBox (MT7620A controller).
  */
+#define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <syslog.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include <uci.h>
 
 #define NODES 4
-#define GPIO_LABEL "pca9555"
+#define GPIO_DEVICE "pca9555"
 #define GPIO_FALLBACK_BASE 496
 #define RUN_DIR "/var/run/nodectl"
 #define LOG_DIR "/var/log/nodectl"
 #define LOCK_DIR "/var/lock"
 #define FLASH_HELPER "/usr/libexec/nodectl/flash"
 #define CONSOLE_BAUD "1500000"
+#define CONSOLE_CLIENTS 8
+#define CONSOLE_ESCAPE 0x1d /* Ctrl-] */
 #define SSH_KEY "/root/.ssh/id_dropbear"
+#define EXT_POWER_VALUE "/sys/class/gpio/ext_en_power/value"
+#define FAN_CHIPS 2
 
 /* Pin offsets on the PCA9555 expander, indexed by node (slot 1..4). */
 static const int EN_OFF[NODES]       = { 3, 2, 0, 1 };
@@ -35,6 +47,8 @@ static const int RESET_OFF[NODES]    = { 8, 9, 11, 10 };
 static const int PRZ_OFF[NODES]      = { 7, 6, 4, 5 };
 static const int TTY_USB[NODES]      = { 1, 2, 3, 0 };
 static const int PCI_BUS[NODES]      = { 6, 5, 3, 4 };
+/* ASM2824 downstream port (device on bus 02) leading to each node's bus. */
+static const int PCI_PORT[NODES]     = { 0x0c, 0x08, 0x00, 0x04 };
 
 enum { EXIT_OK = 0, EXIT_FAIL = 1, EXIT_USAGE = 2, EXIT_BUSY = 3 };
 
@@ -167,8 +181,8 @@ static int find_gpio_base(void)
 	while ((de = readdir(d))) {
 		if (strncmp(de->d_name, "gpiochip", 8))
 			continue;
-		snprintf(path, sizeof(path), "/sys/class/gpio/%s/label", de->d_name);
-		if (read_file(path, buf, sizeof(buf)) || strcmp(buf, GPIO_LABEL))
+		snprintf(path, sizeof(path), "/sys/class/gpio/%s/device/name", de->d_name);
+		if (read_file(path, buf, sizeof(buf)) || strcmp(buf, GPIO_DEVICE))
 			continue;
 		snprintf(path, sizeof(path), "/sys/class/gpio/%s/base", de->d_name);
 		if (!read_file(path, buf, sizeof(buf)))
@@ -250,13 +264,76 @@ static int node_pcie(int n)
 	return access(path, F_OK) == 0;
 }
 
-static void node_tty(int n, char *buf, size_t len)
+/*
+ * Data link state of the switch port in front of the node. Reads the PCIe
+ * Link Status register (DLActive, bit 13) of the ASM2824 downstream port.
+ */
+static int node_pcie_link(int n)
 {
-	snprintf(buf, len, "/dev/ttyCH343USB%d", TTY_USB[n - 1]);
+	unsigned char cfg[256];
+	char path[64];
+	int fd, len, cap, guard;
+
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/0000:02:%02x.0/config", PCI_PORT[n - 1]);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	len = read(fd, cfg, sizeof(cfg));
+	close(fd);
+	if (len < 0x40)
+		return -1;
+	for (cap = cfg[0x34] & 0xfc, guard = 0; cap && cap + 0x14 <= len && guard < 48;
+	     cap = cfg[cap + 1] & 0xfc, guard++) {
+		if (cfg[cap] == 0x10)
+			return ((cfg[cap + 0x12] | cfg[cap + 0x13] << 8) >> 13) & 1;
+	}
+	return -1;
 }
 
-static int ping_start(const char *ip)
+static void node_tty(int n, char *buf, size_t len)
 {
+	const char *tty = node_cfg(n, "tty", NULL);
+
+	if (tty)
+		snprintf(buf, len, "%s", tty);
+	else
+		snprintf(buf, len, "/dev/ttyCH343USB%d", TTY_USB[n - 1]);
+}
+
+static int tcp_check(const char *ip, int port, int timeout_ms)
+{
+	struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(port) };
+	struct pollfd pfd;
+	socklen_t sl = sizeof(int);
+	int fd, err = 0, ok = 0;
+
+	if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1)
+		return 0;
+	fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return 0;
+	if (!connect(fd, (struct sockaddr *)&sa, sizeof(sa))) {
+		ok = 1;
+	} else if (errno == EINPROGRESS) {
+		pfd.fd = fd;
+		pfd.events = POLLOUT;
+		if (poll(&pfd, 1, timeout_ms) == 1 &&
+		    !getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &sl) && !err)
+			ok = 1;
+	}
+	close(fd);
+	return ok;
+}
+
+/*
+ * Reachability probe in a child process so all nodes are checked in
+ * parallel: TCP connect when check_port is set (50000 = Talos API,
+ * 22 = SSH), ICMP ping otherwise.
+ */
+static int probe_start(int n)
+{
+	const char *ip = node_cfg(n, "ipaddr", NULL);
+	int port = atoi(node_cfg(n, "check_port", "0"));
 	pid_t pid;
 	int fd;
 
@@ -264,6 +341,8 @@ static int ping_start(const char *ip)
 		return -1;
 	pid = fork();
 	if (pid == 0) {
+		if (port > 0)
+			_exit(tcp_check(ip, port, 1500) ? 0 : 1);
 		fd = open("/dev/null", O_WRONLY);
 		if (fd >= 0) {
 			dup2(fd, 1);
@@ -275,7 +354,7 @@ static int ping_start(const char *ip)
 	return pid;
 }
 
-static int ping_wait(pid_t pid)
+static int probe_wait(pid_t pid)
 {
 	int st;
 
@@ -286,9 +365,9 @@ static int ping_wait(pid_t pid)
 	return WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
-static int node_ping(int n)
+static int node_reachable(int n)
 {
-	return ping_wait(ping_start(node_cfg(n, "ipaddr", NULL)));
+	return probe_wait(probe_start(n));
 }
 
 /* ---------- per-node locking and operation state ---------- */
@@ -426,7 +505,7 @@ static int do_shutdown(int n, struct opts *o)
 
 	for (t = 0; t < timeout; t++) {
 		if (has_ip) {
-			misses = node_ping(n) == 1 ? 0 : misses + 1;
+			misses = node_reachable(n) == 1 ? 0 : misses + 1;
 			if (misses >= 3) {
 				logmsg(LOG_INFO, "node %d: network down, waiting %d s grace", n, grace);
 				sleep(grace);
@@ -584,22 +663,72 @@ static const char *bool_json(int v)
 	return v < 0 ? "null" : v ? "true" : "false";
 }
 
+static void console_sock_path(int n, char *buf, size_t len)
+{
+	snprintf(buf, len, RUN_DIR "/console%d.sock", n);
+}
+
+static int console_connect(int n)
+{
+	struct sockaddr_un sa = { .sun_family = AF_UNIX };
+	int s;
+
+	console_sock_path(n, sa.sun_path, sizeof(sa.sun_path));
+	s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (s >= 0 && connect(s, (struct sockaddr *)&sa, sizeof(sa))) {
+		close(s);
+		s = -1;
+	}
+	return s;
+}
+
+static int console_served(int n)
+{
+	int s = console_connect(n);
+
+	if (s < 0)
+		return 0;
+	close(s);
+	return 1;
+}
+
+static volatile sig_atomic_t consoled_stop;
+
+static void consoled_signal(int sig)
+{
+	(void)sig;
+	consoled_stop = 1;
+}
+
+static int fan_get(void)
+{
+	char buf[32];
+	long duty, period;
+
+	if (read_file("/sys/class/pwm/pwmchip0/pwm0/duty_cycle", buf, sizeof(buf)))
+		return -1;
+	duty = atol(buf);
+	if (read_file("/sys/class/pwm/pwmchip0/pwm0/period", buf, sizeof(buf)))
+		return -1;
+	period = atol(buf);
+	return period > 0 ? (int)(duty * 100 / period) : -1;
+}
+
 static int cmd_status(struct opts *o)
 {
 	pid_t pids[NODES + 1];
-	int n, first = 1, power, pcie, prz, ping;
-	char tty[32], opbuf[32], name[16];
+	int n, first = 1, power, pcie, link, prz, up, port;
+	char tty[32], opbuf[32], name[16], check[16], ext[8];
 	const char *busy, *ip;
 
 	for (n = 1; n <= NODES; n++)
-		pids[n] = (o->mask & (1u << n)) && node_power(n) == 1 ?
-			ping_start(node_cfg(n, "ipaddr", NULL)) : -1;
+		pids[n] = (o->mask & (1u << n)) && node_power(n) == 1 ? probe_start(n) : -1;
 
 	if (o->json)
 		printf("{\"nodes\":[");
 	else
-		printf("%-4s %-10s %-6s %-5s %-4s %-16s %-6s %s\n",
-		       "NODE", "NAME", "POWER", "PCIE", "PRZ", "IP", "PING", "STATE");
+		printf("%-4s %-10s %-6s %-9s %-4s %-16s %-10s %s\n",
+		       "NODE", "NAME", "POWER", "PCIE", "PRZ", "IP", "CHECK", "STATE");
 
 	for (n = 1; n <= NODES; n++) {
 		if (!(o->mask & (1u << n)))
@@ -607,36 +736,47 @@ static int cmd_status(struct opts *o)
 		snprintf(name, sizeof(name), "blade%d", n);
 		power = node_power(n);
 		pcie = node_pcie(n);
+		link = node_pcie_link(n);
 		prz = gpio_get(PRZ_OFF[n - 1]);
 		ip = node_cfg(n, "ipaddr", NULL);
-		ping = ping_wait(pids[n]);
+		port = atoi(node_cfg(n, "check_port", "0"));
+		up = probe_wait(pids[n]);
 		busy = node_busy(n, opbuf, sizeof(opbuf));
 		node_tty(n, tty, sizeof(tty));
+		if (port > 0)
+			snprintf(check, sizeof(check), "tcp/%d", port);
+		else
+			snprintf(check, sizeof(check), "icmp");
 
 		if (o->json) {
 			printf("%s{\"id\":%d,", first ? "" : ",", n);
 			json_str("name", node_cfg(n, "name", name), 1);
-			printf("\"power\":%s,\"pcie\":%s,\"prz\":%d,", bool_json(power),
-			       bool_json(pcie), prz);
+			printf("\"power\":%s,\"pcie\":%s,\"pcie_link\":%s,\"prz\":%d,",
+			       bool_json(power), bool_json(pcie), bool_json(link), prz);
 			json_str("ipaddr", ip, 1);
-			printf("\"ping\":%s,", ip ? bool_json(ping > 0) : "null");
+			json_str("check", ip ? check : NULL, 1);
+			printf("\"reachable\":%s,", ip && power == 1 ? bool_json(up > 0) : "null");
 			json_str("busy", busy, 1);
-			json_str("tty", tty, 0);
-			printf(",\"tty_present\":%s,\"autostart\":%s}",
-			       bool_json(access(tty, F_OK) == 0),
+			json_str("tty", tty, 1);
+			json_str("baud", node_cfg(n, "baud", CONSOLE_BAUD), 0);
+			printf(",\"tty_present\":%s,\"console_server\":%s,\"autostart\":%s}",
+			       bool_json(access(tty, F_OK) == 0), bool_json(console_served(n)),
 			       bool_json(atoi(node_cfg(n, "autostart", "1"))));
 		} else {
-			printf("%-4d %-10s %-6s %-5s %-4d %-16s %-6s %s\n", n,
+			printf("%-4d %-10s %-6s %-9s %-4d %-16s %-10s %s\n", n,
 			       node_cfg(n, "name", name), power == 1 ? "on" : "off",
-			       pcie ? "yes" : "no", prz, ip ? ip : "-",
-			       !ip ? "-" : ping > 0 ? "ok" : "fail",
+			       pcie ? "endpoint" : link == 1 ? "link" : "down", prz,
+			       ip ? ip : "-", !ip ? "-" : up > 0 ? "ok" : "fail",
 			       busy ? busy : power != 1 ? "off" :
-			       ping > 0 ? "online" : pcie ? "booting" : "no-link");
+			       up > 0 ? "online" : ip ? "booting" : "powered");
 		}
 		first = 0;
 	}
-	if (o->json)
-		printf("],\"gpio_base\":%d}\n", gpio_base);
+	if (o->json) {
+		printf("],\"chassis\":{\"ext_power\":%s,\"fan_duty\":%d},\"gpio_base\":%d}\n",
+		       read_file(EXT_POWER_VALUE, ext, sizeof(ext)) ? "null" :
+		       ext[0] == '1' ? "true" : "false", fan_get(), gpio_base);
+	}
 	return EXIT_OK;
 }
 
@@ -659,19 +799,360 @@ static int cmd_rescan(void)
 	return EXIT_OK;
 }
 
+static speed_t baud_flag(int baud)
+{
+	switch (baud) {
+	case 9600: return B9600;
+	case 19200: return B19200;
+	case 38400: return B38400;
+	case 57600: return B57600;
+	case 115200: return B115200;
+	case 230400: return B230400;
+	case 460800: return B460800;
+	case 921600: return B921600;
+	case 1000000: return B1000000;
+	case 1500000: return B1500000;
+	case 2000000: return B2000000;
+	default: return 0;
+	}
+}
+
+static int tty_open(int n)
+{
+	int baud = atoi(node_cfg(n, "baud", CONSOLE_BAUD));
+	speed_t sp = baud_flag(baud);
+	struct termios tio;
+	char tty[32];
+	int fd;
+
+	node_tty(n, tty, sizeof(tty));
+	if (!sp) {
+		logmsg(LOG_ERR, "node %d: unsupported baud rate %d", n, baud);
+		return -1;
+	}
+	fd = open(tty, O_RDWR | O_NOCTTY | O_CLOEXEC);
+	if (fd < 0) {
+		logmsg(LOG_ERR, "node %d: %s: %s", n, tty, strerror(errno));
+		return -1;
+	}
+	if (tcgetattr(fd, &tio)) {
+		close(fd);
+		return -1;
+	}
+	cfmakeraw(&tio);
+	tio.c_cflag |= CLOCAL | CREAD;
+	tio.c_cflag &= ~CRTSCTS;
+	tio.c_cc[VMIN] = 1;
+	tio.c_cc[VTIME] = 0;
+	cfsetispeed(&tio, sp);
+	cfsetospeed(&tio, sp);
+	if (tcsetattr(fd, TCSANOW, &tio)) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+static int write_all(int fd, const char *buf, ssize_t len)
+{
+	ssize_t w;
+
+	while (len > 0) {
+		w = write(fd, buf, len);
+		if (w < 0 && errno == EINTR)
+			continue;
+		if (w <= 0)
+			return -1;
+		buf += w;
+		len -= w;
+	}
+	return 0;
+}
+
+static int console_log_open(int n, off_t *size)
+{
+	char path[64];
+	struct stat st;
+	int fd;
+
+	mkdir(LOG_DIR, 0755);
+	snprintf(path, sizeof(path), LOG_DIR "/console%d.log", n);
+	fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+	*size = (fd >= 0 && !fstat(fd, &st)) ? st.st_size : 0;
+	return fd;
+}
+
+static int console_log_rotate(int n, int fd, off_t *size)
+{
+	char path[64], old[64];
+
+	snprintf(path, sizeof(path), LOG_DIR "/console%d.log", n);
+	snprintf(old, sizeof(old), LOG_DIR "/console%d.log.1", n);
+	close(fd);
+	rename(path, old);
+	return console_log_open(n, size);
+}
+
+/*
+ * Console server: keeps the node UART open, appends everything to
+ * /var/log/nodectl/consoleN.log (rotated at console_log_kb) and relays it to
+ * every client on a unix socket, so boot output is never lost and several
+ * viewers can share one console.
+ */
+static int cmd_consoled(struct opts *o)
+{
+	int n = single_node(o);
+	off_t log_max = (off_t)cfg_int("global", "console_log_kb", 512) * 1024, log_size;
+	struct pollfd pfd[CONSOLE_CLIENTS + 2];
+	struct sockaddr_un sa = { .sun_family = AF_UNIX };
+	int clients[CONSOLE_CLIENTS];
+	int tty, srv, logfd, i, c, nfds;
+	char buf[4096];
+	ssize_t r;
+
+	struct sigaction sact = { .sa_handler = consoled_signal };
+
+	signal(SIGPIPE, SIG_IGN);
+	sigaction(SIGTERM, &sact, NULL);
+	sigaction(SIGINT, &sact, NULL);
+	for (i = 0; i < CONSOLE_CLIENTS; i++)
+		clients[i] = -1;
+
+	tty = tty_open(n);
+	if (tty < 0)
+		return EXIT_FAIL;
+	/* picocom takes the same lock, so it cannot steal bytes from the server. */
+	if (flock(tty, LOCK_EX | LOCK_NB)) {
+		logmsg(LOG_ERR, "node %d: console is in use by another program", n);
+		return EXIT_BUSY;
+	}
+
+	mkdir(RUN_DIR, 0755);
+	console_sock_path(n, sa.sun_path, sizeof(sa.sun_path));
+	unlink(sa.sun_path);
+	srv = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (srv < 0 || bind(srv, (struct sockaddr *)&sa, sizeof(sa)) || listen(srv, 4)) {
+		logmsg(LOG_ERR, "node %d: console socket: %s", n, strerror(errno));
+		return EXIT_FAIL;
+	}
+	chmod(sa.sun_path, 0600);
+	logfd = console_log_open(n, &log_size);
+	logmsg(LOG_INFO, "node %d: console server started", n);
+
+	while (!consoled_stop) {
+		pfd[0].fd = tty;
+		pfd[0].events = POLLIN;
+		pfd[1].fd = srv;
+		pfd[1].events = POLLIN;
+		for (i = 0, nfds = 2; i < CONSOLE_CLIENTS; i++) {
+			pfd[nfds].fd = clients[i];
+			pfd[nfds].events = POLLIN;
+			nfds++;
+		}
+		if (poll(pfd, nfds, -1) < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+
+		if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			logmsg(LOG_ERR, "node %d: console device lost", n);
+			break;
+		}
+		if (pfd[0].revents & POLLIN) {
+			r = read(tty, buf, sizeof(buf));
+			if (r <= 0 && errno != EINTR && errno != EAGAIN) {
+				logmsg(LOG_ERR, "node %d: console read failed", n);
+				break;
+			}
+			if (r > 0) {
+				if (logfd >= 0 && !write_all(logfd, buf, r)) {
+					log_size += r;
+					if (log_max > 0 && log_size > log_max)
+						logfd = console_log_rotate(n, logfd, &log_size);
+				}
+				for (i = 0; i < CONSOLE_CLIENTS; i++) {
+					if (clients[i] >= 0 && write_all(clients[i], buf, r)) {
+						close(clients[i]);
+						clients[i] = -1;
+					}
+				}
+			}
+		}
+
+		if (pfd[1].revents & POLLIN) {
+			c = accept4(srv, NULL, NULL, SOCK_CLOEXEC);
+			for (i = 0; c >= 0 && i < CONSOLE_CLIENTS && clients[i] >= 0; i++)
+				;
+			if (c >= 0 && i < CONSOLE_CLIENTS)
+				clients[i] = c;
+			else if (c >= 0)
+				close(c);
+		}
+
+		for (i = 0; i < CONSOLE_CLIENTS; i++) {
+			if (clients[i] < 0 || !pfd[i + 2].revents)
+				continue;
+			r = read(clients[i], buf, sizeof(buf));
+			if (r <= 0) {
+				close(clients[i]);
+				clients[i] = -1;
+			} else if (write_all(tty, buf, r)) {
+				break;
+			}
+		}
+	}
+	unlink(sa.sun_path);
+	return consoled_stop ? EXIT_OK : EXIT_FAIL;
+}
+
+static struct termios saved_tio;
+static int saved_tio_ok;
+
+static void restore_terminal(void)
+{
+	if (saved_tio_ok)
+		tcsetattr(0, TCSANOW, &saved_tio);
+}
+
+/* Attach to the console server; exit with Ctrl-] followed by q. */
+static int console_attach(int n)
+{
+	struct pollfd pfd[2];
+	struct termios tio;
+	char buf[4096];
+	int s, escape = 0;
+	ssize_t r, i;
+
+	s = console_connect(n);
+	if (s < 0)
+		return -1;
+
+	if (isatty(0) && !tcgetattr(0, &saved_tio)) {
+		saved_tio_ok = 1;
+		atexit(restore_terminal);
+		tio = saved_tio;
+		cfmakeraw(&tio);
+		tcsetattr(0, TCSANOW, &tio);
+	}
+	printf("[node %d console - exit: Ctrl-] then q]\r\n", n);
+	fflush(stdout);
+
+	pfd[0].fd = 0;
+	pfd[0].events = POLLIN;
+	pfd[1].fd = s;
+	pfd[1].events = POLLIN;
+	for (;;) {
+		if (poll(pfd, 2, -1) < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		if (pfd[1].revents) {
+			r = read(s, buf, sizeof(buf));
+			if (r <= 0 || write_all(1, buf, r))
+				break;
+		}
+		if (pfd[0].revents) {
+			r = read(0, buf, sizeof(buf));
+			if (r <= 0)
+				break;
+			for (i = 0; i < r; i++) {
+				if (escape) {
+					escape = 0;
+					if (buf[i] == 'q' || buf[i] == '.')
+						goto out;
+					if (write_all(s, &buf[i], 1))
+						goto out;
+				} else if (buf[i] == CONSOLE_ESCAPE) {
+					escape = 1;
+				} else if (write_all(s, &buf[i], 1)) {
+					goto out;
+				}
+			}
+		}
+	}
+out:
+	close(s);
+	restore_terminal();
+	printf("\r\n[detached]\r\n");
+	return 0;
+}
+
 static int cmd_console(struct opts *o)
 {
 	int n = single_node(o);
 	char tty[32];
+
+	if (console_served(n) && !console_attach(n))
+		return EXIT_OK;
 
 	node_tty(n, tty, sizeof(tty));
 	if (access(tty, F_OK)) {
 		logmsg(LOG_ERR, "node %d: %s not present", n, tty);
 		return EXIT_FAIL;
 	}
-	execlp("picocom", "picocom", "-q", "-b", CONSOLE_BAUD, tty, (char *)NULL);
+	execlp("picocom", "picocom", "-q", "-b", node_cfg(n, "baud", CONSOLE_BAUD), tty, (char *)NULL);
 	logmsg(LOG_ERR, "picocom: %s", strerror(errno));
 	return EXIT_FAIL;
+}
+
+/* Send a line to the node console without attaching (for scripts and the UI). */
+static int cmd_send(struct opts *o)
+{
+	int n = single_node(o);
+	int s, i, ret = EXIT_OK;
+
+	if (!o->nrest) {
+		fprintf(stderr, "usage: nodectl send -n N -- text...\n");
+		return EXIT_USAGE;
+	}
+	s = console_connect(n);
+	if (s < 0) {
+		logmsg(LOG_ERR, "node %d: console server not running", n);
+		return EXIT_FAIL;
+	}
+	for (i = 0; i < o->nrest && !ret; i++) {
+		if ((i && write_all(s, " ", 1)) || write_all(s, o->rest[i], strlen(o->rest[i])))
+			ret = EXIT_FAIL;
+	}
+	if (!ret && write_all(s, "\r", 1))
+		ret = EXIT_FAIL;
+	msleep(200);
+	close(s);
+	return ret;
+}
+
+static int cmd_fan(struct opts *o)
+{
+	char path[64], buf[32];
+	long period;
+	int pct, i;
+
+	if (!o->nrest) {
+		printf("%d\n", fan_get());
+		return EXIT_OK;
+	}
+	pct = atoi(o->rest[0]);
+	if (pct < 0 || pct > 100) {
+		fprintf(stderr, "fan duty must be 0-100\n");
+		return EXIT_USAGE;
+	}
+	for (i = 0; i < FAN_CHIPS; i++) {
+		snprintf(path, sizeof(path), "/sys/class/pwm/pwmchip%d/pwm0/period", i);
+		if (read_file(path, buf, sizeof(buf)) || (period = atol(buf)) <= 0) {
+			logmsg(LOG_ERR, "fan %d: PWM not initialised", i);
+			return EXIT_FAIL;
+		}
+		snprintf(path, sizeof(path), "/sys/class/pwm/pwmchip%d/pwm0/duty_cycle", i);
+		snprintf(buf, sizeof(buf), "%ld", period * pct / 100);
+		if (write_file(path, buf)) {
+			logmsg(LOG_ERR, "fan %d: failed to set duty", i);
+			return EXIT_FAIL;
+		}
+	}
+	logmsg(LOG_NOTICE, "fans set to %d%%", pct);
+	return EXIT_OK;
 }
 
 static int cmd_ssh(struct opts *o)
@@ -809,8 +1290,11 @@ static void usage(FILE *fp)
 	"                                   press power button, wait, cut power\n"
 	"  reboot   (-n N|--all) [--hard]   graceful (or hard) power cycle\n"
 	"  reset    -n N                    pulse the hardware reset line\n"
-	"  console  -n N                    serial console (exit: Ctrl-A Ctrl-X)\n"
-	"  ssh      -n N [-- command...]    SSH to the node over pci0\n"
+	"  console  -n N                    serial console (exit: Ctrl-] q)\n"
+	"  send     -n N -- text...         type a line into the serial console\n"
+	"  consoled -n N                    console server with log (run by procd)\n"
+	"  ssh      -n N [-- command...]    SSH to the node\n"
+	"  fan      [PERCENT]               show or set fan duty\n"
 	"  flash    -n N -f IMAGE|URL [--target DEV] [--no-reboot] [-y]\n"
 	"                                   stream an OS image to the node disk\n"
 	"  boot                             apply boot_action (used by init)\n"
@@ -877,6 +1361,10 @@ static void parse_opts(int argc, char **argv, struct opts *o)
 		} else if (!strcmp(a, "--target") && next) {
 			o->target = next;
 			i++;
+		} else if (a[0] != '-') {
+			o->rest = &argv[i];
+			o->nrest = argc - i;
+			return;
 		} else {
 			fprintf(stderr, "unknown or incomplete option: %s\n", a);
 			die_usage();
@@ -937,6 +1425,12 @@ int main(int argc, char **argv)
 		ret = run_nodes("reset", do_reset, &o, 0, 0);
 	} else if (!strcmp(cmd, "console")) {
 		ret = cmd_console(&o);
+	} else if (!strcmp(cmd, "consoled")) {
+		ret = cmd_consoled(&o);
+	} else if (!strcmp(cmd, "send")) {
+		ret = cmd_send(&o);
+	} else if (!strcmp(cmd, "fan")) {
+		ret = cmd_fan(&o);
 	} else if (!strcmp(cmd, "ssh")) {
 		ret = cmd_ssh(&o);
 	} else if (!strcmp(cmd, "flash")) {

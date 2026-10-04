@@ -55,6 +55,9 @@ list)
 		"console": { "node": 1, "mode": "serial" },
 		"flash": { "node": 1, "source": "", "target": "", "reboot": true },
 		"log": { "node": 1 },
+		"console_log": { "node": 1, "bytes": 16384 },
+		"send": { "node": 1, "text": "" },
+		"fan": { "duty": 85 },
 		"leases": {},
 		"pubkey": {}
 	}
@@ -114,6 +117,29 @@ call)
 		json_init
 		json_add_string log "$(tail -c 8192 "$f" 2>/dev/null)"
 		json_dump
+		;;
+	console_log)
+		json_get_vars node bytes
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$bytes" in ''|*[!0-9]*) bytes=16384 ;; esac
+		[ "$bytes" -gt 262144 ] && bytes=262144
+		f=/var/log/nodectl/console$node.log
+		json_init
+		json_add_string log "$( { [ -f "$f.1" ] && tail -c "$bytes" "$f.1"; tail -c "$bytes" "$f"; } 2>/dev/null |
+			tail -c "$bytes" | tr -d '\000-\010\013\014\016-\032\034-\037')"
+		json_dump
+		;;
+	send)
+		json_get_vars node text
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		run send -n "$node" -- "$text"
+		;;
+	fan)
+		json_get_vars duty
+		case "$duty" in ''|*[!0-9]*) reply 2 "duty must be 0-100"; exit 0 ;; esac
+		[ "$duty" -le 100 ] || { reply 2 "duty must be 0-100"; exit 0; }
+		uci -q set nodectl.global.fan_duty="$duty" && uci -q commit nodectl
+		run fan "$duty"
 		;;
 	leases)
 		json_init

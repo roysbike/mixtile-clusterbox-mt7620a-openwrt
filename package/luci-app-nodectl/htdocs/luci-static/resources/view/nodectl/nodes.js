@@ -7,8 +7,7 @@
 
 var callStatus = rpc.declare({
 	object: 'nodectl',
-	method: 'status',
-	expect: { nodes: [] }
+	method: 'status'
 });
 
 var callAction = rpc.declare({
@@ -35,16 +34,35 @@ var callLog = rpc.declare({
 	expect: { log: '' }
 });
 
+var callConsoleLog = rpc.declare({
+	object: 'nodectl',
+	method: 'console_log',
+	params: [ 'node', 'bytes' ],
+	expect: { log: '' }
+});
+
+var callSend = rpc.declare({
+	object: 'nodectl',
+	method: 'send',
+	params: [ 'node', 'text' ]
+});
+
+var callFan = rpc.declare({
+	object: 'nodectl',
+	method: 'fan',
+	params: [ 'duty' ]
+});
+
 function nodeState(n) {
 	if (n.busy)
 		return [ _('Busy: %s').format(n.busy), '#e0a000' ];
 	if (!n.power)
 		return [ _('Off'), '#888' ];
-	if (n.ping)
+	if (n.reachable)
 		return [ _('Online'), '#2a2' ];
-	if (n.ping === false)
-		return [ n.pcie ? _('Booting / no network') : _('No PCIe link'), '#e0a000' ];
-	return [ n.pcie ? _('Powered, PCIe up') : _('Powered, no PCIe link'), '#e0a000' ];
+	if (n.reachable === false)
+		return [ _('Powered, not answering'), '#e0a000' ];
+	return [ _('Powered'), '#e0a000' ];
 }
 
 function badge(text, color) {
@@ -53,13 +71,32 @@ function badge(text, color) {
 	}, text);
 }
 
-function yesno(v) {
-	return v == null ? '-' : (v ? _('yes') : _('no'));
+function pcieText(n) {
+	if (n.pcie_link == null)
+		return '-';
+	if (!n.pcie_link)
+		return _('down');
+	return n.pcie ? _('up') : _('link, no device');
+}
+
+/* Drop ANSI escape sequences and fold carriage returns for the log viewer. */
+function cleanTerm(s) {
+	return s
+		.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+		.replace(/\x1b[\]P^_][^\x07\x1b]*(\x07|\x1b\\)?/g, '')
+		.replace(/\x1b./g, '')
+		.replace(/\r+\n/g, '\n')
+		.replace(/[^\n]*\r/g, '');
+}
+
+function normalize(st) {
+	st = st || {};
+	return { nodes: st.nodes || [], chassis: st.chassis || {} };
 }
 
 return view.extend({
 	load: function() {
-		return callStatus();
+		return callStatus().then(normalize);
 	},
 
 	confirm: function(title, text, label) {
@@ -109,6 +146,8 @@ return view.extend({
 				return;
 			}
 			ui.showModal(_('Node %d - %s console').format(node, mode === 'ssh' ? 'SSH' : _('serial')), [
+				E('p', { 'class': 'cbi-value-description' },
+					mode === 'ssh' ? '' : _('Press Ctrl-] then q to detach.')),
 				E('iframe', {
 					'src': url,
 					'style': 'width:100%;height:70vh;border:none;background:#000'
@@ -135,6 +174,82 @@ return view.extend({
 		});
 	},
 
+	/* Read-only view of the console log with a one-line command input; it
+	 * works without ttyd and keeps the history the console server recorded. */
+	showConsoleLog: function(n) {
+		var self = this;
+		var out = E('pre', {
+			'style': 'height:60vh;overflow:auto;white-space:pre-wrap;background:#111;color:#ddd;padding:6px;font-size:12px'
+		}, _('Loading…'));
+		var input = E('input', {
+			'type': 'text',
+			'class': 'cbi-input-text',
+			'style': 'width:70%',
+			'placeholder': _('Command to send (Enter is appended)')
+		});
+		var follow = E('input', { 'type': 'checkbox', 'checked': '' });
+		var timer = null, open = true;
+
+		var update = function() {
+			if (!open)
+				return Promise.resolve();
+			return callConsoleLog(n.id, 32768).then(function(log) {
+				var atEnd = out.scrollTop + out.clientHeight >= out.scrollHeight - 20;
+
+				out.textContent = log ? cleanTerm(log) : _('Console log is empty.');
+				if (follow.checked && atEnd)
+					out.scrollTop = out.scrollHeight;
+			});
+		};
+
+		var send = function(text) {
+			return callSend(n.id, text).then(function(res) {
+				if (res.code != 0)
+					ui.addNotification(null, E('pre', {}, res.output || _('Send failed')), 'danger');
+				input.value = '';
+				window.setTimeout(update, 700);
+			});
+		};
+
+		var close = function() {
+			open = false;
+			window.clearInterval(timer);
+			ui.hideModal();
+		};
+
+		input.addEventListener('keydown', function(ev) {
+			if (ev.key === 'Enter') {
+				ev.preventDefault();
+				send(input.value);
+			}
+		});
+
+		ui.showModal(_('Node %d (%s) - serial console log').format(n.id, n.name), [
+			n.console_server ? '' : E('p', { 'class': 'alert-message warning' },
+				_('The console server for this node is not running; the log is not updated and commands cannot be sent.')),
+			out,
+			E('div', { 'style': 'margin-top:6px' }, [
+				input, ' ',
+				E('button', { 'class': 'btn cbi-button-action', 'disabled': n.console_server ? null : '',
+					'click': function() { send(input.value); } }, _('Send')), ' ',
+				E('button', { 'class': 'btn', 'disabled': n.console_server ? null : '',
+					'click': function() { send(''); } }, _('Enter'))
+			]),
+			E('div', { 'class': 'right', 'style': 'margin-top:6px' }, [
+				E('label', { 'style': 'margin-right:1em' }, [ follow, ' ', _('Follow') ]),
+				E('button', { 'class': 'btn', 'click': function() { close(); self.openConsole(n.id, 'serial'); } }, _('Interactive')), ' ',
+				E('button', { 'class': 'btn', 'click': close }, _('Close'))
+			])
+		], 'cbi-modal');
+
+		var modal = document.querySelector('#modal_overlay .modal');
+		if (modal)
+			modal.style.maxWidth = '95vw';
+
+		timer = window.setInterval(update, 2000);
+		return update().then(function() { out.scrollTop = out.scrollHeight; });
+	},
+
 	btn: function(label, style, fn, disabled) {
 		return E('button', {
 			'class': 'btn cbi-button ' + (style || ''),
@@ -154,9 +269,15 @@ return view.extend({
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, [ E('strong', {}, '#' + n.id), ' ', n.name ]),
 				E('td', { 'class': 'td' }, badge(st[0], st[1])),
-				E('td', { 'class': 'td' }, yesno(n.pcie)),
-				E('td', { 'class': 'td' }, n.ipaddr || E('em', {}, _('not set'))),
-				E('td', { 'class': 'td' }, String(n.prz)),
+				E('td', { 'class': 'td' }, pcieText(n)),
+				E('td', { 'class': 'td' }, n.ipaddr
+					? [ n.ipaddr, E('br'), E('small', {}, n.check || '') ]
+					: E('em', {}, _('not set'))),
+				E('td', { 'class': 'td' }, [
+					n.tty_present ? n.tty.replace('/dev/', '') : E('em', {}, _('no tty')),
+					E('br'),
+					E('small', {}, n.console_server ? _('server on, %s baud').format(n.baud) : _('server off'))
+				]),
 				E('td', { 'class': 'td' }, [
 					n.power
 						? self.btn(_('Shutdown'), 'cbi-button-action', function() {
@@ -176,24 +297,54 @@ return view.extend({
 					}, !n.power),
 					' ',
 					self.btn(_('Serial'), '', function() { return self.openConsole(n.id, 'serial'); }, !n.tty_present),
-					self.btn(_('SSH'), '', function() { return self.openConsole(n.id, 'ssh'); }, !n.ipaddr || !n.ping),
-					self.btn(_('Log'), '', function() { return self.showLog(n.id); })
+					self.btn(_('Console log'), '', function() { return self.showConsoleLog(n); }),
+					self.btn(_('SSH'), '', function() { return self.openConsole(n.id, 'ssh'); }, !n.ipaddr || !n.reachable),
+					self.btn(_('Job log'), '', function() { return self.showLog(n.id); })
 				])
 			]);
 		});
 	},
 
+	renderChassis: function(c) {
+		var self = this;
+		var duty = E('input', {
+			'type': 'number', 'min': 0, 'max': 100, 'style': 'width:5em',
+			'class': 'cbi-input-text', 'value': c.fan_duty != null && c.fan_duty >= 0 ? c.fan_duty : ''
+		});
+
+		return [
+			E('span', { 'style': 'margin-right:2em' }, [
+				E('strong', {}, _('Node power rail: ')),
+				c.ext_power == null ? '-' : badge(c.ext_power ? _('on') : _('off'), c.ext_power ? '#2a2' : '#888')
+			]),
+			E('span', {}, [
+				E('strong', {}, _('Fans: ')), duty, ' % ',
+				this.btn(_('Set'), 'cbi-button-apply', function() {
+					return callFan(parseInt(duty.value, 10)).then(function(res) {
+						if (res.code != 0)
+							ui.addNotification(null, E('pre', {}, res.output || _('Command failed')), 'danger');
+						return self.refresh();
+					});
+				})
+			])
+		];
+	},
+
 	refresh: function() {
 		var self = this;
 
-		return callStatus().then(function(nodes) {
+		return callStatus().then(normalize).then(function(st) {
 			var tbody = document.getElementById('nodectl-rows');
+			var chassis = document.getElementById('nodectl-chassis');
+
 			if (tbody)
-				dom.content(tbody, self.renderRows(nodes));
+				dom.content(tbody, self.renderRows(st.nodes));
+			if (chassis && !chassis.contains(document.activeElement))
+				dom.content(chassis, self.renderChassis(st.chassis));
 		});
 	},
 
-	render: function(nodes) {
+	render: function(st) {
 		var self = this;
 
 		poll.add(function() { return self.refresh(); }, 5);
@@ -203,6 +354,7 @@ return view.extend({
 			E('div', { 'class': 'cbi-map-descr' },
 				_('Power, reset and console access for the nodes of this ClusterBox. Node IP addresses and timings are set under Cluster → Settings.')),
 			E('div', { 'class': 'cbi-section' }, [
+				E('div', { 'id': 'nodectl-chassis', 'style': 'margin-bottom:1em' }, this.renderChassis(st.chassis)),
 				E('div', { 'style': 'margin-bottom:1em' }, [
 					this.btn(_('Power on all'), 'cbi-button-positive', function() {
 						return self.doAction(0, 'poweron');
@@ -220,10 +372,10 @@ return view.extend({
 						E('th', { 'class': 'th' }, _('State')),
 						E('th', { 'class': 'th' }, _('PCIe')),
 						E('th', { 'class': 'th' }, _('IP address')),
-						E('th', { 'class': 'th' }, _('PRZ')),
+						E('th', { 'class': 'th' }, _('Console')),
 						E('th', { 'class': 'th' }, _('Actions'))
 					])),
-					E('tbody', { 'id': 'nodectl-rows' }, this.renderRows(nodes))
+					E('tbody', { 'id': 'nodectl-rows' }, this.renderRows(st.nodes))
 				])
 			])
 		]);

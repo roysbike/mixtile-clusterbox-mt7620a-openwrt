@@ -18,7 +18,13 @@ set_duty() {
 }
 
 start() {
-    set_duty 1700000
+	local pct=$(uci -q get nodectl.global.fan_duty)
+
+	case "$pct" in
+		''|*[!0-9]*) pct=85 ;;
+	esac
+	[ "$pct" -gt 100 ] && pct=100
+	set_duty $((2000000 * pct / 100))
 }
 
 stop() {
