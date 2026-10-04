@@ -31,5 +31,6 @@ config kube 'kube'
 	option kubeconfig '/etc/teleport/kubeconfig'
 
 config installer 'installer'
-	option repo 'roysbike/mixtile-clusterbox-mt7620a-openwrt'
+	# GitHub repo that publishes teleport-v*-mipsel release assets
+	option repo 'mixtile-rockchip/mixtile-clusterbox-mt7620a-openwrt'
 	option version 'latest'

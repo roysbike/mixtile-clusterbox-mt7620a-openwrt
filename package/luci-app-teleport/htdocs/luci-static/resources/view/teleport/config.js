@@ -208,6 +208,14 @@ return view.extend({
 		o = s.option(form.Value, 'data_dir', _('Data directory'));
 		o.placeholder = '/opt/teleport/data';
 
+		s = m.section(form.NamedSection, 'installer', 'installer', _('Agent download'));
+		s.addremove = false;
+		o = s.option(form.Value, 'repo', _('GitHub repository'),
+			_('Must publish teleport-v*-mipsel release assets. Default is the official firmware repo.'));
+		o.placeholder = 'mixtile-rockchip/mixtile-clusterbox-mt7620a-openwrt';
+		o = s.option(form.Value, 'version', _('Default version'));
+		o.placeholder = 'latest';
+
 		s = m.section(form.NamedSection, 'ssh', 'ssh', _('SSH to the ClusterBox'));
 		s.addremove = false;
 		o = s.option(form.Flag, 'enabled', _('Enable'));

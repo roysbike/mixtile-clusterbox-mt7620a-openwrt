@@ -3206,7 +3206,8 @@ CONFIG_PACKAGE_kmod-hwmon-core=y
 # CONFIG_PACKAGE_kmod-hwmon-it87 is not set
 # CONFIG_PACKAGE_kmod-hwmon-lm63 is not set
 # CONFIG_PACKAGE_kmod-hwmon-lm70 is not set
-CONFIG_PACKAGE_kmod-hwmon-lm75=y
+# No LM75 (or other temp IC) on the ClusterBox I2C bus.
+# CONFIG_PACKAGE_kmod-hwmon-lm75 is not set
 # CONFIG_PACKAGE_kmod-hwmon-lm77 is not set
 # CONFIG_PACKAGE_kmod-hwmon-lm85 is not set
 # CONFIG_PACKAGE_kmod-hwmon-lm90 is not set

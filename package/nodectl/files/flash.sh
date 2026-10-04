@@ -69,5 +69,11 @@ sync"
 
 log "writing $SOURCE -> $TARGET"
 start=$(date +%s)
-read_source | ssh_node "$REMOTE" || fail "write failed after $(( $(date +%s) - start )) s; the node disk is likely incomplete, re-run flash"
+src_st=/tmp/nodectl-flash-src.$$
+rm -f "$src_st"
+( read_source; echo $? > "$src_st" ) | ssh_node "$REMOTE" \
+	|| fail "write failed after $(( $(date +%s) - start )) s; the node disk is likely incomplete, re-run flash"
+src_rc=$(cat "$src_st" 2>/dev/null || echo 1)
+rm -f "$src_st"
+[ "$src_rc" = 0 ] || fail "source read failed (rc $src_rc); the node disk is likely incomplete, re-run flash"
 log "done in $(( $(date +%s) - start )) s"

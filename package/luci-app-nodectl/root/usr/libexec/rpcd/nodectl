@@ -138,6 +138,15 @@ call)
 			/*|http://*|https://*) ;;
 			*) reply 2 "source must be an absolute path or an http(s) URL"; exit 0 ;;
 		esac
+		if [ -n "$target" ]; then
+			case "$target" in
+				/dev/*) ;;
+				*) reply 2 "target must be a /dev path"; exit 0 ;;
+			esac
+			case "$target" in
+				*[!A-Za-z0-9/_.-]*) reply 2 "invalid characters in target"; exit 0 ;;
+			esac
+		fi
 		set -- flash -n "$node" -f "$source" -y --bg
 		[ -n "$target" ] && set -- "$@" --target "$target"
 		[ "$reboot" = 0 ] && set -- "$@" --no-reboot
@@ -233,6 +242,13 @@ call)
 			uci -q delete dhcp.@dnsmasq[0].tftp_root
 			uci -q delete dhcp.@dnsmasq[0].dhcp_boot
 		else
+			if [ -n "$bootfile" ]; then
+				case "$bootfile" in
+					*/*|.*) reply 2 "invalid bootfile"; exit 0 ;;
+					*[!A-Za-z0-9._+-]*) reply 2 "invalid bootfile"; exit 0 ;;
+				esac
+				[ -f "/opt/pxe/$bootfile" ] || { reply 2 "bootfile not in /opt/pxe"; exit 0; }
+			fi
 			uci -q set dhcp.@dnsmasq[0].enable_tftp=1
 			uci -q set dhcp.@dnsmasq[0].tftp_root=/opt/pxe
 			[ -n "$bootfile" ] && uci -q set dhcp.@dnsmasq[0].dhcp_boot="$bootfile"

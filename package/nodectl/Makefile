@@ -45,4 +45,14 @@ define Package/nodectl/install
 	$(INSTALL_BIN) ./files/nodectl-console.init $(1)/etc/init.d/nodectl-console
 endef
 
+define Package/nodectl/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] || {
+	/etc/init.d/blade3-boot enable
+	/etc/init.d/nodectl-console enable
+	/etc/init.d/nodectl-console start
+}
+exit 0
+endef
+
 $(eval $(call BuildPackage,nodectl))

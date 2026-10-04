@@ -20,6 +20,13 @@ uci -q get ttyd.nodectl >/dev/null || {
 mkdir -p /opt/pxe /var/run/node-exporter
 [ -e /www/pxe ] || ln -s /opt/pxe /www/pxe
 
+for s in blade3-boot nodectl-console nodectl-metrics; do
+	[ -x "/etc/init.d/$s" ] || continue
+	/etc/init.d/"$s" enabled 2>/dev/null || /etc/init.d/"$s" enable
+done
+[ -x /etc/init.d/nodectl-console ] && /etc/init.d/nodectl-console start
+[ -x /etc/init.d/nodectl-metrics ] && /etc/init.d/nodectl-metrics start
+
 if [ -f /etc/config/prometheus-node-exporter-lua ]; then
 	uci -q set prometheus-node-exporter-lua.main.listen_interface='loopback'
 	uci -q set prometheus-node-exporter-lua.main.listen_port='9100'

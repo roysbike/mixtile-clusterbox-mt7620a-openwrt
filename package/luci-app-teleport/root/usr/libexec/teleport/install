@@ -11,7 +11,7 @@ LOCK=/var/lock/teleport-install
 STATE=/var/run/teleport-install.state
 
 repo=$(uci -q get teleport.installer.repo)
-repo=${repo:-roysbike/mixtile-clusterbox-mt7620a-openwrt}
+repo=${repo:-mixtile-rockchip/mixtile-clusterbox-mt7620a-openwrt}
 
 list_versions() {
 	uclient-fetch -q -O - "https://api.github.com/repos/$repo/releases?per_page=50" |
