@@ -6,14 +6,14 @@ on:
       version:
         description: Teleport version (match the major version of your cluster)
         required: true
-        default: "18.11.1"
+        default: "18.10.0"
   push:
     paths:
       - scripts/build-teleport-mipsel.sh
       - .github/workflows/teleport-mipsel.yml
 
 env:
-  TELEPORT_VERSION: ${{ inputs.version || '18.11.1' }}
+  TELEPORT_VERSION: ${{ inputs.version || '18.10.0' }}
 
 permissions:
   contents: write
