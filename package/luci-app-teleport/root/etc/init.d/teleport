@@ -1,0 +1,192 @@
+#!/bin/sh /etc/rc.common
+# Teleport agent: joins the cluster at proxy_server over an outbound tunnel and
+# publishes SSH to this box, HTTP apps, Kubernetes and databases behind it.
+
+START=99
+STOP=10
+USE_PROCD=1
+EXTRA_COMMANDS="genconfig"
+EXTRA_HELP="	genconfig	Write and print the agent config generated from UCI"
+
+BIN=/opt/teleport/teleport
+RUN_DIR=/var/etc/teleport
+CONF=$RUN_DIR/teleport.yaml
+
+. /usr/share/libubox/jshn.sh
+
+add_labels() {
+	local key=$1 section=$2 l
+
+	json_add_object "$key"
+	add_label() {
+		case "$1" in
+			*=*) json_add_string "${1%%=*}" "${1#*=}" ;;
+		esac
+	}
+	config_list_foreach "$section" label add_label
+	json_close_object
+}
+
+add_app() {
+	local s=$1 enabled name uri v
+
+	config_get_bool enabled "$s" enabled 1
+	config_get name "$s" name
+	config_get uri "$s" uri
+	[ "$enabled" = 1 ] && [ -n "$name" ] && [ -n "$uri" ] || return 0
+
+	json_add_object
+	json_add_string name "$name"
+	json_add_string uri "$uri"
+	config_get v "$s" description && [ -n "$v" ] && json_add_string description "$v"
+	config_get v "$s" public_addr && [ -n "$v" ] && json_add_string public_addr "$v"
+	config_get_bool v "$s" insecure_skip_verify 0
+	[ "$v" = 1 ] && json_add_boolean insecure_skip_verify 1
+	add_labels labels "$s"
+	json_close_object
+	apps=$((apps + 1))
+}
+
+add_db() {
+	local s=$1 enabled name protocol uri v
+
+	config_get_bool enabled "$s" enabled 1
+	config_get name "$s" name
+	config_get protocol "$s" protocol
+	config_get uri "$s" uri
+	[ "$enabled" = 1 ] && [ -n "$name" ] && [ -n "$protocol" ] && [ -n "$uri" ] || return 0
+
+	json_add_object
+	json_add_string name "$name"
+	json_add_string protocol "$protocol"
+	json_add_string uri "$uri"
+	config_get v "$s" description && [ -n "$v" ] && json_add_string description "$v"
+	config_get v "$s" tls_mode
+	if [ -n "$v" ]; then
+		json_add_object tls
+		json_add_string mode "$v"
+		json_close_object
+	fi
+	add_labels static_labels "$s"
+	json_close_object
+	dbs=$((dbs + 1))
+}
+
+add_ca_pin() {
+	json_add_string "" "$1"
+}
+
+gen_config() {
+	local proxy token method nodename data_dir severity ssh kube kubeconfig apps=0 dbs=0
+
+	config_get proxy main proxy_server
+	config_get token main token
+	config_get method main join_method token
+	config_get nodename main nodename "$(uci -q get system.@system[0].hostname)"
+	config_get data_dir main data_dir /opt/teleport/data
+	config_get severity main log_severity INFO
+	config_get_bool ssh ssh enabled 1
+	config_get_bool kube kube enabled 0
+	config_get kubeconfig kube kubeconfig /etc/teleport/kubeconfig
+
+	[ -n "$proxy" ] || { echo "teleport: proxy_server is not set" >&2; return 1; }
+	[ -n "$token" ] || [ "$method" != token ] || { echo "teleport: join token is not set" >&2; return 1; }
+
+	json_init
+	json_add_string version v3
+
+	json_add_object teleport
+	json_add_string nodename "$nodename"
+	json_add_string data_dir "$data_dir"
+	json_add_string proxy_server "$proxy"
+	json_add_object join_params
+	json_add_string method "$method"
+	json_add_string token_name "$token"
+	json_close_object
+	json_add_array ca_pin
+	config_list_foreach main ca_pin add_ca_pin
+	json_close_array
+	json_add_object log
+	json_add_string output stderr
+	json_add_string severity "$severity"
+	json_close_object
+	json_close_object
+
+	json_add_object auth_service
+	json_add_boolean enabled 0
+	json_close_object
+	json_add_object proxy_service
+	json_add_boolean enabled 0
+	json_close_object
+
+	json_add_object ssh_service
+	json_add_boolean enabled "$ssh"
+	json_add_string listen_addr 127.0.0.1:3022
+	json_add_object labels
+	add_label() { case "$1" in *=*) json_add_string "${1%%=*}" "${1#*=}" ;; esac; }
+	config_list_foreach main label add_label
+	config_list_foreach ssh label add_label
+	json_close_object
+	json_close_object
+
+	json_add_object app_service
+	json_add_array apps
+	config_foreach add_app app
+	json_close_array
+	json_add_boolean enabled $([ "$apps" -gt 0 ] && echo 1 || echo 0)
+	json_close_object
+
+	json_add_object kubernetes_service
+	if [ "$kube" = 1 ] && [ -s "$kubeconfig" ]; then
+		chmod 600 "$kubeconfig"
+		json_add_boolean enabled 1
+		json_add_string kubeconfig_file "$kubeconfig"
+		add_labels labels kube
+	else
+		json_add_boolean enabled 0
+	fi
+	json_close_object
+
+	json_add_object db_service
+	json_add_array databases
+	config_foreach add_db database
+	json_close_array
+	json_add_boolean enabled $([ "$dbs" -gt 0 ] && echo 1 || echo 0)
+	json_close_object
+
+	mkdir -p "$RUN_DIR" "$data_dir"
+	chmod 700 "$RUN_DIR" "$data_dir"
+	umask 077
+	# jshn escapes "/" as "\/", which is JSON but not YAML.
+	json_dump | sed 's#\\/#/#g' > "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+}
+
+genconfig() {
+	config_load teleport
+	gen_config && cat "$CONF"
+}
+
+start_service() {
+	local enabled mem
+
+	config_load teleport
+	config_get_bool enabled main enabled 0
+	[ "$enabled" = 1 ] || return 0
+	[ -x "$BIN" ] || { echo "teleport: $BIN is not installed (LuCI: Services → Teleport)" >&2; return 1; }
+	gen_config || return 1
+	config_get mem main mem_limit 96
+
+	procd_open_instance
+	procd_set_param command "$BIN" start --config "$CONF"
+	procd_set_param env GOMEMLIMIT="${mem}MiB" GOGC=50 GOMAXPROCS=1
+	procd_set_param file "$CONF"
+	procd_set_param respawn 3600 10 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param term_timeout 15
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger teleport
+}

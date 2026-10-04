@@ -1,0 +1,71 @@
+#!/bin/sh
+# Install or update the Teleport agent binary from a GitHub release of the
+# firmware repository (built by .github/workflows/teleport-mipsel.yml).
+#
+#   install [VERSION|latest]     install (default: installer.version)
+#   install --list               print available versions, newest first
+
+DIR=/opt/teleport
+BIN=$DIR/teleport
+LOCK=/var/lock/teleport-install
+STATE=/var/run/teleport-install.state
+
+repo=$(uci -q get teleport.installer.repo)
+repo=${repo:-roysbike/mixtile-clusterbox-mt7620a-openwrt}
+
+list_versions() {
+	uclient-fetch -q -O - "https://api.github.com/repos/$repo/releases?per_page=50" |
+		jsonfilter -e '@[*].tag_name' | sed -n 's/^teleport-v\(.*\)-mipsel$/\1/p'
+}
+
+if [ "$1" = --list ]; then
+	list_versions
+	exit
+fi
+
+state() {
+	echo "$*" > "$STATE"
+	echo "$*"
+}
+
+fail() {
+	state "failed $*"
+	rm -f "$DIR/teleport.gz.part" "$DIR/teleport.new"
+	rmdir "$LOCK" 2>/dev/null
+	exit 1
+}
+
+mkdir "$LOCK" 2>/dev/null || { echo "another installation is running"; exit 3; }
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+version=${1:-$(uci -q get teleport.installer.version)}
+if [ -z "$version" ] || [ "$version" = latest ]; then
+	state "running resolving latest version"
+	version=$(list_versions | head -n 1)
+	[ -n "$version" ] || fail "no teleport-v*-mipsel release found in $repo"
+fi
+version=${version#v}
+case "$version" in
+	*[!0-9A-Za-z.+-]*) fail "invalid version $version" ;;
+esac
+
+url="https://github.com/$repo/releases/download/teleport-v$version-mipsel/teleport-$version-linux-mipsel.gz"
+mkdir -p "$DIR" || fail "cannot create $DIR"
+
+state "running downloading $version"
+want=$(uclient-fetch -q -O - "$url.sha256" | cut -d' ' -f1)
+[ ${#want} -eq 64 ] || fail "cannot fetch checksum for $version"
+uclient-fetch -q -O "$DIR/teleport.gz.part" "$url" || fail "download of $version failed"
+[ "$(sha256sum "$DIR/teleport.gz.part" | cut -d' ' -f1)" = "$want" ] || fail "checksum mismatch"
+
+state "running unpacking $version"
+gzip -dc "$DIR/teleport.gz.part" > "$DIR/teleport.new" || fail "unpack failed (disk full?)"
+rm -f "$DIR/teleport.gz.part"
+chmod 755 "$DIR/teleport.new"
+"$DIR/teleport.new" version >/dev/null 2>&1 || fail "the binary does not run on this system"
+mv -f "$DIR/teleport.new" "$BIN"
+sync
+
+state "ok $version"
+/etc/init.d/teleport enabled && /etc/init.d/teleport restart
+exit 0

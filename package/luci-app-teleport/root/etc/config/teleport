@@ -1,0 +1,33 @@
+config teleport 'main'
+	option enabled '0'
+	# Teleport proxy (web) address of the cluster to join
+	option proxy_server 'tp.example.com:443'
+	option join_method 'token'
+	option token ''
+	# Optional CA pin(s) printed by `tctl status`
+	# list ca_pin 'sha256:...'
+	option nodename 'clusterbox'
+	option data_dir '/opt/teleport/data'
+	option log_severity 'INFO'
+	# Soft memory limit of the agent (GOMEMLIMIT), MiB
+	option mem_limit '96'
+	list label 'site=home'
+	list label 'hw=clusterbox'
+
+config ssh 'ssh'
+	option enabled '1'
+	list label 'role=bmc'
+
+config app
+	option name 'clusterbox'
+	option uri 'http://127.0.0.1:80'
+	option description 'ClusterBox LuCI'
+	option enabled '1'
+
+config kube 'kube'
+	option enabled '0'
+	option kubeconfig '/etc/teleport/kubeconfig'
+
+config installer 'installer'
+	option repo 'roysbike/mixtile-clusterbox-mt7620a-openwrt'
+	option version 'latest'

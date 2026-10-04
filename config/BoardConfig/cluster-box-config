@@ -2778,6 +2778,7 @@ CONFIG_PACKAGE_sudo=y
 # Custom Component
 #
 CONFIG_PACKAGE_luci-app-nodectl=y
+CONFIG_PACKAGE_luci-app-teleport=y
 CONFIG_PACKAGE_nodectl=y
 # end of Custom Component
 
