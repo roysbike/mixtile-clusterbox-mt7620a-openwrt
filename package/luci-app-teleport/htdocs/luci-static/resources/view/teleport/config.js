@@ -149,10 +149,13 @@ return view.extend({
 	refreshStatus: function() {
 		var self = this;
 
-		return Promise.all([ callStatus(), callServer(''), callVersions() ]).then(function(r) {
+		/* Only poll the cheap status (pid/rss). server/versions hit the
+		 * network and must not run on the 10s timer — they used to fork
+		 * the 380 MB agent binary via `teleport version`. */
+		return callStatus().then(function(st) {
 			var el = document.getElementById('teleport-status');
 			if (el && !el.contains(document.activeElement))
-				dom.content(el, self.renderStatus(r[0], r[1], r[2]));
+				dom.content(el, self.renderStatus(st, self._server || {}, self._versions || []));
 		});
 	},
 
@@ -195,7 +198,12 @@ return view.extend({
 
 		o = s.option(form.Value, 'mem_limit', _('Memory limit (MiB)'), _('Soft Go heap limit; the box has 256 MiB RAM.'));
 		o.datatype = 'range(48,200)';
-		o.placeholder = '96';
+		o.placeholder = '64';
+
+		o = s.option(form.Value, 'nice', _('CPU nice'),
+			_('15 keeps LuCI responsive. 0 lets the agent use the whole core (XHR timeouts).'));
+		o.datatype = 'range(0,19)';
+		o.placeholder = '15';
 
 		o = s.option(form.Value, 'data_dir', _('Data directory'));
 		o.placeholder = '/opt/teleport/data';
@@ -274,11 +282,13 @@ return view.extend({
 		o = s.option(form.DynamicList, 'label', _('Labels'));
 		o.modalonly = true;
 
-		poll.add(function() { return self.refreshStatus(); }, 10);
+		this._server = data[1] || {};
+		this._versions = data[2] || [];
+		poll.add(function() { return self.refreshStatus(); }, 15);
 
 		return m.render().then(function(node) {
 			var descr = node.querySelector('.cbi-map-descr');
-			var status = E('div', { 'id': 'teleport-status' }, self.renderStatus(data[0], data[1], data[2]));
+			var status = E('div', { 'id': 'teleport-status' }, self.renderStatus(data[0], self._server, self._versions));
 
 			if (descr)
 				descr.parentNode.insertBefore(status, descr.nextSibling);

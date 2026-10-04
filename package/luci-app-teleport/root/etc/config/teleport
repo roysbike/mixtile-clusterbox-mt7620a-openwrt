@@ -10,7 +10,9 @@ config teleport 'main'
 	option data_dir '/opt/teleport/data'
 	option log_severity 'INFO'
 	# Soft memory limit of the agent (GOMEMLIMIT), MiB
-	option mem_limit '96'
+	option mem_limit '64'
+	# Lower than LuCI/rpcd so the UI stays usable while the agent is busy
+	option nice '15'
 	list label 'site=home'
 	list label 'hw=clusterbox'
 

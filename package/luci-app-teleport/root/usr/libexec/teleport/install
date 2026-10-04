@@ -64,6 +64,7 @@ rm -f "$DIR/teleport.gz.part"
 chmod 755 "$DIR/teleport.new"
 "$DIR/teleport.new" version >/dev/null 2>&1 || fail "the binary does not run on this system"
 mv -f "$DIR/teleport.new" "$BIN"
+echo "$version" > "$DIR/version"
 sync
 
 state "ok $version"

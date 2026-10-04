@@ -40,8 +40,9 @@ call)
 
 	case "$2" in
 	status)
-		installed=
-		[ -x "$BIN" ] && installed=$("$BIN" version 2>/dev/null | sed -n 's/^Teleport v\([^ ]*\).*/\1/p')
+		installed=$(cat /opt/teleport/version 2>/dev/null)
+		[ -n "$installed" ] || [ ! -x "$BIN" ] ||
+			installed=$("$BIN" version 2>/dev/null | sed -n 's/^Teleport v\([^ ]*\).*/\1/p')
 		pid=$(agent_pid)
 		rss=
 		[ -n "$pid" ] && rss=$(sed -n 's/^VmRSS:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$pid/status" 2>/dev/null)
