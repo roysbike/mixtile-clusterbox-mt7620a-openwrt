@@ -47,11 +47,14 @@ go build -trimpath -o "$WORK/teleport.bin" \
 
 # MIPS jal/j only reach targets inside the same 256 MiB region: all code must
 # sit below 0x10000000, otherwise calls across the boundary jump to garbage.
-"$READELF" -l -W "$WORK/teleport.bin" | grep -E '^ *LOAD .* R?W?E ' |
-while read -r _ _ vaddr _ _ memsz _; do
-	end=$((vaddr + memsz))
-	if [ $((vaddr >> 28)) -ne $(((end - 1) >> 28)) ]; then
-		printf 'code segment %#x-%#x crosses a 256 MiB boundary\n' "$vaddr" "$end" >&2
+"$READELF" -S -W "$WORK/teleport.bin" | sed -n 's/^ *\[ *[0-9]*\] //p' |
+while read -r name _ addr _ size _ flags _; do
+	case "$flags" in *X*) ;; *) continue ;; esac
+	start=$((0x$addr)) end=$((0x$addr + 0x$size))
+	printf '%s: %#x-%#x\n' "$name" "$start" "$end"
+	: "${region:=$((start >> 28))}"
+	if [ $((start >> 28)) -ne "$region" ] || [ $(((end - 1) >> 28)) -ne "$region" ]; then
+		echo "$name is outside the 256 MiB region of the other code" >&2
 		exit 1
 	fi
 done
