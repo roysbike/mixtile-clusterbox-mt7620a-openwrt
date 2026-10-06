@@ -1,0 +1,577 @@
+#!/bin/sh
+# Firmware updates for the Mixtile ClusterBox BMC from GitHub Releases.
+#
+#   mixtile-update status
+#   mixtile-update check [--channel rc|stable]
+#   mixtile-update download [--background]
+#   mixtile-update verify [--allow-downgrade] [--allow-protocol-change]
+#   mixtile-update install --yes [--background] [--allow-downgrade] [--allow-protocol-change]
+#   mixtile-update verify-local IMAGE
+#   mixtile-update install-local --yes IMAGE [--allow-downgrade] [--allow-protocol-change]
+#   mixtile-update post-boot
+#   mixtile-update prune-list      files an install keeps from the overlay
+#   mixtile-update prune-preview   files an install removes from the overlay
+#
+# Every command prints one JSON object. Nothing is installed without
+# "install --yes", and install repeats every check of "verify".
+#
+# install-local installs an image downloaded by hand, with SHA256SUMS and
+# clusterbox-firmware.json from the same release next to it. It also
+# works on ClusterBox firmware without mixtile-update (first install):
+# copy this script to /tmp and run it with sh.
+#
+# A release is usable only if it has these assets:
+#   clusterbox-firmware.json  board, target, version, commit, protocol,
+#                             image name, sha256 (made by CI)
+#   SHA256SUMS                checksums of all assets
+#   <image>                   the sysupgrade image named in the manifest
+# Optional: SHA256SUMS.sig (usign signature over SHA256SUMS). It is
+# checked when /etc/mixtile-update/keys/ holds a key, and required when
+# option require_signature is 1.
+
+. /usr/share/libubox/jshn.sh
+
+RELEASE_FILE=${MIXTILE_RELEASE_FILE:-/etc/mixtile-release}
+STATE_DIR=/etc/mixtile-update
+KEY_DIR=$STATE_DIR/keys
+WORK=/tmp/mixtile-update
+CHECK=$WORK/check.json
+IMAGE=$WORK/firmware.bin
+SUMS=$WORK/SHA256SUMS
+SIG=$WORK/SHA256SUMS.sig
+MANIFEST=$WORK/clusterbox-firmware.json
+VERIFIED=$WORK/verified
+DLLOG=$WORK/download.log
+INSTLOG=$WORK/install.log
+LOCK=/var/lock/mixtile-update.lock
+SELF=/usr/libexec/mixtile-update
+# Kept from the overlay when /etc/mixtile-update/keep does not exist yet
+# (first install from older firmware).
+DEFAULT_KEEP="/etc/mixtile-update/ /etc/rc.d/ /root/.ssh/ /home/ /opt/"
+
+LOCAL=0
+LOCAL_IMAGE=
+ALLOW_DOWNGRADE=0
+ALLOW_PROTO=0
+YES=0
+BACKGROUND=0
+CHANNEL_ARG=
+
+mkdir -p "$WORK"
+
+# ---- helpers ---------------------------------------------------------------
+
+fail() {
+	json_init
+	json_add_string status error
+	json_add_string message "$1"
+	json_dump
+	exit 1
+}
+
+# Value of KEY from /etc/mixtile-release (shell syntax, double quotes).
+rel() {
+	sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$RELEASE_FILE" 2>/dev/null | head -n1
+}
+
+cfg() {
+	uci -q get "mixtile-update.main.$1"
+}
+
+board_name() {
+	cat /tmp/sysinfo/board_name 2>/dev/null
+}
+
+# vX.Y.Z or vX.Y.Z-rc.N -> sortable key; empty if the tag is not one of ours.
+ver_key() {
+	echo "$1" | awk '
+	/^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/ {
+		s = substr($0, 2); rc = 99999
+		if (index(s, "-rc.")) { rc = substr(s, index(s, "-rc.") + 4); s = substr(s, 1, index(s, "-rc.") - 1) }
+		split(s, v, ".")
+		printf "%05d%05d%05d%05d\n", v[1], v[2], v[3], rc
+	}'
+}
+
+# Prints -1, 0 or 1. Unparseable versions compare as 0 (never "newer").
+ver_cmp() {
+	local a b
+	a=$(ver_key "$1"); b=$(ver_key "$2")
+	[ -n "$a" ] && [ -n "$b" ] || { echo 0; return; }
+	if [ "$a" = "$b" ]; then echo 0
+	elif [ "$(printf '%s\n%s\n' "$a" "$b" | sort | head -n1)" = "$a" ]; then echo -1
+	else echo 1
+	fi
+}
+
+channel() {
+	local c=${CHANNEL_ARG:-$(cfg channel)}
+	[ -n "$c" ] || c=$(rel UPDATE_CHANNEL)
+	case "$c" in
+	stable|rc) echo "$c" ;;
+	*) echo rc ;;
+	esac
+}
+
+repository() {
+	local r
+	r=$(cfg repository)
+	[ -n "$r" ] || r=$(rel REPOSITORY)
+	r=${r#https://github.com/}
+	r=${r%.git}
+	echo "$r"
+}
+
+fetch() {
+	# fetch URL FILE: HTTPS only, certificate checked by uclient-fetch.
+	case "$1" in https://*) ;; *) return 1 ;; esac
+	rm -f "$2.tmp"
+	uclient-fetch -q -T 60 -O "$2.tmp" "$1" >/dev/null 2>&1 && [ -s "$2.tmp" ] &&
+		mv "$2.tmp" "$2"
+}
+
+sha256() {
+	sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+}
+
+jget() {
+	jsonfilter -i "$1" -e "$2" 2>/dev/null
+}
+
+# JSON true/false (or 1/0) -> 1/0 for json_add_boolean.
+bool() {
+	case "$1" in true|1) echo 1 ;; *) echo 0 ;; esac
+}
+
+lock() {
+	exec 9>"$LOCK"
+	flock -n 9 || fail "another mixtile-update command is running"
+}
+
+# Every check that must hold before an image may be installed. Prints a
+# reason and returns 1 on the first failure.
+check_image() {
+	local board target cur img want got name proto cur_proto meta
+
+	[ -s "$CHECK" ] || [ "$LOCAL" = 1 ] || { echo "run check first"; return 1; }
+	[ -s "$MANIFEST" ] && [ -s "$SUMS" ] && [ -s "$IMAGE" ] ||
+		{ echo "image, SHA256SUMS or clusterbox-firmware.json missing (run download first)"; return 1; }
+
+	board=$(board_name)
+	target=$(rel TARGET)
+	[ -n "$target" ] || target=$(sed -n "s/^DISTRIB_TARGET='\(.*\)'$/\1/p" /etc/openwrt_release 2>/dev/null)
+	[ -n "$board" ] || { echo "cannot determine this board"; return 1; }
+	[ -n "$target" ] || { echo "cannot determine this firmware target ($RELEASE_FILE)"; return 1; }
+	[ "$(jget "$MANIFEST" @.board)" = "$board" ] ||
+		{ echo "release is for board '$(jget "$MANIFEST" @.board)', this is '$board'"; return 1; }
+	[ "$(jget "$MANIFEST" @.target)" = "$target" ] ||
+		{ echo "release is for target '$(jget "$MANIFEST" @.target)', this is '$target'"; return 1; }
+	[ "$LOCAL" = 1 ] || [ "$(jget "$MANIFEST" @.version)" = "$(jget "$CHECK" @.latest_version)" ] ||
+		{ echo "manifest version does not match the release tag"; return 1; }
+	[ -n "$(ver_key "$(jget "$MANIFEST" @.version)")" ] || { echo "release version $(jget "$MANIFEST" @.version) is not vX.Y.Z[-rc.N]"; return 1; }
+
+	# Firmware without /etc/mixtile-release (first install) has no version
+	# or protocol to compare with.
+	cur=$(rel FIRMWARE_VERSION)
+	[ -n "$(ver_key "$cur")" ] && case "$(ver_cmp "$(jget "$MANIFEST" @.version)" "$cur")" in
+	1) ;;
+	0) [ "$ALLOW_DOWNGRADE" = 1 ] || { echo "$cur is already installed (use --allow-downgrade to reinstall)"; return 1; } ;;
+	-1) [ "$ALLOW_DOWNGRADE" = 1 ] || { echo "release is older than $cur (use --allow-downgrade)"; return 1; } ;;
+	esac
+
+	proto=$(jget "$MANIFEST" @.openmiop_protocol)
+	cur_proto=$(rel OPENMIOP_PROTOCOL)
+	[ -n "$proto" ] || { echo "release does not state its OpenMIOP protocol"; return 1; }
+	if [ -n "$cur_proto" ] && [ "$proto" != "$cur_proto" ] && [ "$ALLOW_PROTO" != 1 ]; then
+		echo "release uses OpenMIOP protocol v$proto, this firmware v$cur_proto; all blades must be upgraded to match (use --allow-protocol-change)"
+		return 1
+	fi
+
+	name=$(jget "$MANIFEST" @.image)
+	[ "$LOCAL" != 1 ] || [ "$(basename "$IMAGE")" = "$name" ] ||
+		{ echo "clusterbox-firmware.json describes $name, not $(basename "$IMAGE")"; return 1; }
+	want=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$SUMS")
+	[ -n "$want" ] || { echo "SHA256SUMS has no entry for $name"; return 1; }
+	[ "$want" = "$(jget "$MANIFEST" @.sha256)" ] ||
+		{ echo "manifest and SHA256SUMS disagree"; return 1; }
+	got=$(sha256 "$IMAGE")
+	[ "$got" = "$want" ] || { echo "SHA256 mismatch: expected $want, got $got"; return 1; }
+
+	if [ -n "$(ls "$KEY_DIR" 2>/dev/null)" ] || [ "$(cfg require_signature)" = 1 ]; then
+		[ -s "$SIG" ] || { echo "release is not signed (SHA256SUMS.sig missing)"; return 1; }
+		usign -q -V -m "$SUMS" -x "$SIG" -P "$KEY_DIR" ||
+			{ echo "signature check of SHA256SUMS failed"; return 1; }
+	fi
+
+	meta=$WORK/image.meta
+	rm -f "$meta"
+	fwtool -q -i "$meta" "$IMAGE" && [ -s "$meta" ] || { echo "image has no OpenWrt metadata"; return 1; }
+	jsonfilter -i "$meta" -e '@.supported_devices[*]' | grep -qx "$board" ||
+		{ echo "image metadata does not list board $board"; return 1; }
+
+	sysupgrade -T "$IMAGE" >/dev/null 2>&1 || { echo "sysupgrade -T rejected the image"; return 1; }
+	echo "$got"
+}
+
+# Paths of the overlay that survive an update: what "sysupgrade -l"
+# would back up (conffiles, /etc/sysupgrade.conf, /lib/upgrade/keep.d),
+# plus the paths in /etc/mixtile-update/keep (a trailing / keeps a
+# whole directory).
+prune_list() {
+	sysupgrade -l 2>/dev/null
+	keep_extra
+}
+
+keep_extra() {
+	if [ -f "$STATE_DIR/keep" ]; then
+		grep '^/' "$STATE_DIR/keep"
+	else
+		echo "$DEFAULT_KEEP" | tr ' ' '\n'
+	fi
+}
+
+# Remove every file of the overlay that is not kept, so the new
+# firmware's files are not shadowed by the old ones. This board's
+# sysupgrade writes kernel and rootfs only; the ext4 overlay on
+# mmcblk0p3 survives the update as it is. With "preview", only print
+# what would be removed.
+prune_overlay() {
+	local upper=/overlay/upper keep=$WORK/keep.list rm=$WORK/prune.list f
+	[ -d "$upper" ] || return 0
+	sysupgrade -l > "$keep" 2>/dev/null
+	[ -s "$keep" ] || return 1
+	( cd "$upper" && find . \( -type f -o -type l -o -type c \) ) | sed 's|^\.||' |
+	keep_extra > "$WORK/keep.extra"
+	awk -v keep="$keep" -v extra="$WORK/keep.extra" '
+		BEGIN {
+			while ((getline l < keep) > 0) k[l] = 1
+			while ((getline l < extra) > 0) {
+				sub(/[ \t]+$/, "", l)
+				if (l !~ /^\//) continue
+				if (l ~ /\/$/) p[++np] = l; else k[l] = 1
+			}
+		}
+		{
+			if ($0 in k) next
+			for (i = 1; i <= np; i++) if (index($0, p[i]) == 1) next
+			print
+		}' > "$rm"
+	[ "$1" = preview ] && { cat "$rm"; return 0; }
+	while read -r f; do
+		rm -f "$upper$f"
+	done < "$rm"
+	find "$upper" -depth -mindepth 1 -type d -empty -exec rmdir {} \; 2>/dev/null
+	return 0
+}
+
+# ---- commands --------------------------------------------------------------
+
+cmd_status() {
+	local dl=none size=0 v
+	json_init
+	json_add_string status ok
+	json_add_string firmware_name "$(rel FIRMWARE_NAME)"
+	json_add_string current_version "$(rel FIRMWARE_VERSION)"
+	json_add_string current_commit "$(rel GIT_COMMIT)"
+	json_add_string build_date "$(rel BUILD_DATE)"
+	json_add_string openmiop_protocol "$(rel OPENMIOP_PROTOCOL)"
+	json_add_string board "$(board_name)"
+	json_add_string target "$(rel TARGET)"
+	json_add_string channel "$(channel)"
+	json_add_string repository "$(repository)"
+	if [ -s "$CHECK" ]; then
+		json_add_string latest_version "$(jget "$CHECK" @.latest_version)"
+		json_add_string checked_at "$(jget "$CHECK" @.checked_at)"
+		json_add_boolean update_available "$(bool "$(jget "$CHECK" @.update_available)")"
+	fi
+	if [ -f "$WORK/download.pid" ] && kill -0 "$(cat "$WORK/download.pid")" 2>/dev/null; then
+		dl=running
+		size=$(wc -c < "$IMAGE.tmp" 2>/dev/null || echo 0)
+	elif [ -s "$IMAGE" ]; then
+		dl=done
+		size=$(wc -c < "$IMAGE")
+	elif [ -s "$DLLOG" ]; then
+		dl=failed
+	fi
+	json_add_string download "$dl"
+	json_add_int downloaded_bytes "${size:-0}"
+	[ "$dl" = failed ] && json_add_string download_error "$(tail -n1 "$DLLOG")"
+	[ -s "$VERIFIED" ] && [ -s "$IMAGE" ] && json_add_string verified_sha256 "$(cat "$VERIFIED")"
+	[ -s "$STATE_DIR/pending" ] && json_add_string pending_install "$(cat "$STATE_DIR/pending")"
+	if [ -s "$STATE_DIR/last-install" ]; then
+		v=$(cat "$STATE_DIR/last-install")
+		json_add_string last_install "$v"
+	fi
+	json_add_boolean signature_required "$([ -n "$(ls "$KEY_DIR" 2>/dev/null)" ] || [ "$(cfg require_signature)" = 1 ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_check() {
+	local repo chan list n i tag pre draft best= best_idx= url body cur cmp avail
+	local rel_json=$WORK/releases.json api
+
+	lock
+	repo=$(repository)
+	chan=$(channel)
+	[ -n "$repo" ] || fail "no update repository configured"
+	api=$(cfg api); [ -n "$api" ] || api=https://api.github.com
+	fetch "$api/repos/$repo/releases?per_page=30" "$rel_json" ||
+		fail "cannot reach $api (network or DNS problem)"
+
+	n=$(jsonfilter -i "$rel_json" -e '@[*].tag_name' 2>/dev/null | wc -l)
+	i=0
+	while [ "$i" -lt "$n" ]; do
+		tag=$(jget "$rel_json" "@[$i].tag_name")
+		pre=$(jget "$rel_json" "@[$i].prerelease")
+		draft=$(jget "$rel_json" "@[$i].draft")
+		i=$((i + 1))
+		[ "$draft" = true ] && continue
+		[ -n "$(ver_key "$tag")" ] || continue
+		[ "$chan" = stable ] && { [ "$pre" = true ] && continue; case "$tag" in *-*) continue ;; esac; }
+		if [ -z "$best" ] || [ "$(ver_cmp "$tag" "$best")" = 1 ]; then
+			best=$tag; best_idx=$((i - 1))
+		fi
+	done
+
+	cur=$(rel FIRMWARE_VERSION)
+	json_init
+	json_add_string status ok
+	json_add_string channel "$chan"
+	json_add_string repository "$repo"
+	json_add_string current_version "$cur"
+	json_add_string checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	if [ -z "$best" ]; then
+		json_add_string latest_version ""
+		json_add_boolean update_available 0
+		json_add_string message "no $chan release found in $repo"
+		json_dump > "$CHECK"
+		cat "$CHECK"
+		return 0
+	fi
+
+	asset_url() {
+		local j=0 name
+		while name=$(jget "$rel_json" "@[$best_idx].assets[$j].name") && [ -n "$name" ]; do
+			[ "$name" = "$1" ] && { jget "$rel_json" "@[$best_idx].assets[$j].browser_download_url"; return; }
+			j=$((j + 1))
+		done
+	}
+
+	url=$(asset_url clusterbox-firmware.json)
+	[ -n "$url" ] || fail "release $best has no clusterbox-firmware.json; it is not a ClusterBox firmware release"
+	rm -f "$MANIFEST" "$SUMS" "$SIG"
+	fetch "$url" "$MANIFEST" || fail "cannot download the release manifest"
+	fetch "$(asset_url SHA256SUMS)" "$SUMS" || fail "cannot download SHA256SUMS"
+	url=$(asset_url SHA256SUMS.sig)
+	[ -n "$url" ] && fetch "$url" "$SIG"
+
+	cmp=$(ver_cmp "$best" "$cur")
+	avail=0; [ "$cmp" = 1 ] && avail=1
+	body=$(jget "$rel_json" "@[$best_idx].body" | head -c 8192)
+
+	json_add_string latest_version "$best"
+	json_add_boolean update_available "$avail"
+	json_add_boolean prerelease "$(bool "$(jget "$rel_json" "@[$best_idx].prerelease")")"
+	json_add_string release_url "$(jget "$rel_json" "@[$best_idx].html_url")"
+	json_add_string published_at "$(jget "$rel_json" "@[$best_idx].published_at")"
+	json_add_string release_notes "$body"
+	json_add_string image "$(jget "$MANIFEST" @.image)"
+	json_add_string image_url "$(asset_url "$(jget "$MANIFEST" @.image)")"
+	json_add_int image_size "$(jget "$MANIFEST" @.size)"
+	json_add_string image_sha256 "$(jget "$MANIFEST" @.sha256)"
+	json_add_string commit "$(jget "$MANIFEST" @.commit)"
+	json_add_string board "$(jget "$MANIFEST" @.board)"
+	json_add_string target "$(jget "$MANIFEST" @.target)"
+	json_add_string openmiop_protocol "$(jget "$MANIFEST" @.openmiop_protocol)"
+	json_add_boolean signed "$([ -s "$SIG" ] && echo 1 || echo 0)"
+	json_dump > "$CHECK"
+	# A new check invalidates an earlier download.
+	[ "$(cat "$WORK/image.version" 2>/dev/null)" = "$best" ] || rm -f "$IMAGE" "$VERIFIED"
+	cat "$CHECK"
+}
+
+cmd_download() {
+	local url size avail ver
+	[ -s "$CHECK" ] || fail "run check first"
+	url=$(jget "$CHECK" @.image_url)
+	ver=$(jget "$CHECK" @.latest_version)
+	[ -n "$url" ] || fail "the release has no firmware image for this board"
+	size=$(jget "$CHECK" @.image_size)
+	avail=$(awk '/^MemAvailable:/ { print $2 * 1024 }' /proc/meminfo)
+	[ "${size:-0}" -gt 0 ] && [ "$avail" -gt $((size + 16 * 1024 * 1024)) ] ||
+		fail "not enough free memory for a ${size:-?} byte image"
+
+	if [ "$BACKGROUND" = 1 ]; then
+		rm -f "$DLLOG"
+		start-stop-daemon -S -b -m -p "$WORK/download.pid" -x "$SELF" -- download
+		json_init; json_add_string status started; json_dump
+		return 0
+	fi
+
+	lock
+	rm -f "$IMAGE" "$VERIFIED" "$WORK/image.version"
+	echo "downloading $url" > "$DLLOG"
+	if ! uclient-fetch -q -T 120 -O "$IMAGE.tmp" "$url" >/dev/null 2>&1; then
+		rm -f "$IMAGE.tmp"
+		echo "download failed" >> "$DLLOG"
+		fail "download failed"
+	fi
+	mv "$IMAGE.tmp" "$IMAGE"
+	echo "$ver" > "$WORK/image.version"
+	: > "$DLLOG"
+	json_init
+	json_add_string status downloaded
+	json_add_string version "$ver"
+	json_add_int size "$(wc -c < "$IMAGE")"
+	json_dump
+}
+
+cmd_verify() {
+	local out
+	lock
+	rm -f "$VERIFIED"
+	out=$(check_image) || fail "$out"
+	echo "$out" > "$VERIFIED"
+	json_init
+	json_add_string status verified
+	json_add_string version "$(jget "$MANIFEST" @.version)"
+	json_add_string commit "$(jget "$MANIFEST" @.commit)"
+	json_add_string sha256 "$out"
+	json_add_boolean signature_checked "$([ -n "$(ls "$KEY_DIR" 2>/dev/null)" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_install() {
+	local out args=
+	[ "$YES" = 1 ] || fail "install needs --yes"
+	[ -s "$VERIFIED" ] || fail "run verify first"
+
+	if [ "$BACKGROUND" = 1 ]; then
+		[ "$ALLOW_DOWNGRADE" = 1 ] && args="$args --allow-downgrade"
+		[ "$ALLOW_PROTO" = 1 ] && args="$args --allow-protocol-change"
+		# Same checks, synchronously, so LuCI gets the error.
+		out=$(check_image) || fail "$out"
+		: > "$INSTLOG"
+		start-stop-daemon -S -b -m -p "$WORK/install.pid" -x /bin/sh -- \
+			-c "exec $SELF install --yes $args >>$INSTLOG 2>&1"
+		json_init; json_add_string status installing; json_dump
+		return 0
+	fi
+
+	lock
+	# Everything again: the file in /tmp could have changed since verify.
+	out=$(check_image) || fail "$out"
+	[ "$out" = "$(cat "$VERIFIED")" ] || fail "image changed after verify"
+
+	mkdir -p "$STATE_DIR"
+	printf '%s %s %s\n' "$(jget "$MANIFEST" @.version)" "$(jget "$MANIFEST" @.commit)" \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/pending"
+	logger -t mixtile-update "installing $(jget "$MANIFEST" @.version) ($out)"
+	prune_overlay || fail "could not compute the list of preserved files"
+	sync
+	json_init
+	json_add_string status rebooting
+	json_add_string version "$(jget "$MANIFEST" @.version)"
+	json_dump
+	# -n: the overlay is already reduced to what is kept; a config
+	# tarball would only fill RAM (it is never restored on this board).
+	exec sysupgrade -n "$IMAGE"
+}
+
+local_paths() {
+	local dir
+	[ -n "$LOCAL_IMAGE" ] && [ -s "$LOCAL_IMAGE" ] || fail "usage: $cmd${1:+ $1} IMAGE"
+	LOCAL=1
+	dir=$(cd "$(dirname "$LOCAL_IMAGE")" && pwd)
+	IMAGE=$dir/$(basename "$LOCAL_IMAGE")
+	SUMS=$dir/SHA256SUMS
+	SIG=$dir/SHA256SUMS.sig
+	MANIFEST=$dir/clusterbox-firmware.json
+}
+
+cmd_verify_local() {
+	local out
+	local_paths
+	out=$(check_image) || fail "$out"
+	json_init
+	json_add_string status verified
+	json_add_string version "$(jget "$MANIFEST" @.version)"
+	json_add_string commit "$(jget "$MANIFEST" @.commit)"
+	json_add_string sha256 "$out"
+	json_dump
+}
+
+cmd_install_local() {
+	local out
+	[ "$YES" = 1 ] || fail "install-local needs --yes"
+	local_paths --yes
+	lock
+	out=$(check_image) || fail "$out"
+	mkdir -p "$STATE_DIR"
+	printf '%s %s %s\n' "$(jget "$MANIFEST" @.version)" "$(jget "$MANIFEST" @.commit)" \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/pending"
+	logger -t mixtile-update "installing $(jget "$MANIFEST" @.version) from $IMAGE ($out)"
+	prune_overlay || fail "could not compute the list of preserved files"
+	sync
+	json_init
+	json_add_string status rebooting
+	json_add_string version "$(jget "$MANIFEST" @.version)"
+	json_dump
+	exec sysupgrade -n "$IMAGE"
+}
+
+# Run once at boot: compare the installed firmware with the pending update.
+cmd_post_boot() {
+	local want_ver want_commit when have_ver have_commit result
+	[ -s "$STATE_DIR/pending" ] || { json_init; json_add_string status ok; json_dump; return 0; }
+	read -r want_ver want_commit when < "$STATE_DIR/pending"
+	have_ver=$(rel FIRMWARE_VERSION)
+	have_commit=$(rel GIT_COMMIT)
+	if [ "$have_ver" = "$want_ver" ] && [ "$have_commit" = "$want_commit" ]; then
+		result=ok
+	else
+		result=mismatch
+	fi
+	echo "$result $want_ver $have_ver $have_commit $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/last-install"
+	rm -f "$STATE_DIR/pending"
+	logger -t mixtile-update "update to $want_ver: $result (running $have_ver $have_commit)"
+	json_init
+	json_add_string status "$result"
+	json_add_string expected "$want_ver"
+	json_add_string running "$have_ver"
+	json_dump
+}
+
+# ---- main ------------------------------------------------------------------
+
+cmd=$1
+[ $# -gt 0 ] && shift
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--allow-downgrade) ALLOW_DOWNGRADE=1 ;;
+	--allow-protocol-change) ALLOW_PROTO=1 ;;
+	--yes) YES=1 ;;
+	--background) BACKGROUND=1 ;;
+	--channel) CHANNEL_ARG=$2; shift ;;
+	-*) fail "unknown option $1" ;;
+	*) case "$cmd" in install-local|verify-local) ;; *) false ;; esac && [ -z "$LOCAL_IMAGE" ] && LOCAL_IMAGE=$1 || fail "unexpected argument $1" ;;
+	esac
+	shift
+done
+
+case "$cmd" in
+status) cmd_status ;;
+check) cmd_check ;;
+download) cmd_download ;;
+verify) cmd_verify ;;
+install) cmd_install ;;
+install-local) cmd_install_local ;;
+verify-local) cmd_verify_local ;;
+post-boot) cmd_post_boot ;;
+prune-list) prune_list ;;
+prune-preview) prune_overlay preview ;;
+*)
+	echo "usage: mixtile-update status|check [--channel rc|stable]|download [--background]|verify|install --yes [--background] [--allow-downgrade] [--allow-protocol-change]|verify-local IMAGE|install-local --yes IMAGE|post-boot|prune-list|prune-preview" >&2
+	exit 2
+	;;
+esac
