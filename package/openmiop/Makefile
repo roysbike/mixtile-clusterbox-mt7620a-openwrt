@@ -17,6 +17,11 @@ PKG_LICENSE_FILES:=LICENSE
 
 include $(INCLUDE_DIR)/package.mk
 
+# Ship the binaries as built (about 12 KiB each): sstrip drops the
+# .MIPS.abiflags section that shows they are soft-float.
+RSTRIP:=:
+STRIP:=:
+
 define Package/openmiop
 	CATEGORY:=Custom Component
 	TITLE:=openmiop root-complex helper for the Cluster Box PCIe fabric

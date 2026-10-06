@@ -10,14 +10,17 @@ set -euo pipefail
 dir=${1:?release dir}
 want_version=${2:-}
 want_commit=${3:-}
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# die: a prerequisite is missing; fail: record and keep checking.
+die() { echo "FAIL: $*" >&2; exit 1; }
+failed=0
+fail() { echo "FAIL: $*" >&2; failed=1; }
 ok() { echo "ok: $*"; }
 
 json=$dir/clusterbox-firmware.json
-[ -s "$json" ] || fail "missing $json"
+[ -s "$json" ] || die "missing $json"
 image=$dir/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$json")
-[ -s "$image" ] || fail "missing $image"
-(cd "$dir" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS"
+[ -s "$image" ] || die "missing $image"
+(cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "SHA256SUMS"
 ok "SHA256SUMS"
 [ "$(sha256sum "$image" | cut -d' ' -f1)" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$json")" ] ||
 	fail "clusterbox-firmware.json sha256 does not match the image"
@@ -27,16 +30,16 @@ trap 'rm -rf "$work"' EXIT
 
 # The SD-card image is the kernel (uImage) padded to 10 MiB, then the
 # squashfs rootfs, then the OpenWrt metadata trailer.
-head -c 4 "$image" | od -An -tx1 | grep -q '27 05 19 56' || fail "no uImage at offset 0"
+head -c 4 "$image" | od -An -tx1 | grep -q '27 05 19 56' || die "no uImage at offset 0"
 dd if="$image" of="$work/rootfs.sqsh" bs=1M skip=10 status=none
-[ "$(head -c 4 "$work/rootfs.sqsh")" = hsqs ] || fail "no squashfs at 10 MiB"
+[ "$(head -c 4 "$work/rootfs.sqsh")" = hsqs ] || die "no squashfs at 10 MiB"
 unsquashfs -q -n -d "$work/root" "$work/rootfs.sqsh" >/dev/null 2>&1 || true
 r=$work/root
-[ -d "$r/etc" ] || fail "could not unpack the rootfs"
+[ -d "$r/etc" ] || die "could not unpack the rootfs"
 ok "rootfs unpacked ($(du -sh "$work/rootfs.sqsh" | cut -f1) squashfs)"
 
 # fwtool is an OpenWrt host tool (staging_dir/host/bin after a build).
-command -v fwtool >/dev/null || fail "fwtool not in PATH"
+command -v fwtool >/dev/null || die "fwtool not in PATH"
 fwtool -q -i "$work/meta.json" "$image" || fail "image has no OpenWrt metadata"
 python3 - "$work/meta.json" <<'EOF' || fail "image metadata does not list cluster-box-control-V120"
 import json, sys
@@ -45,7 +48,7 @@ EOF
 ok "OpenWrt metadata lists cluster-box-control-V120 (sysupgrade -T accepts it on this board)"
 
 # Identity
-[ -s "$r/etc/mixtile-release" ] || fail "/etc/mixtile-release missing"
+[ -s "$r/etc/mixtile-release" ] || die "/etc/mixtile-release missing"
 # shellcheck disable=SC1091
 . "$r/etc/mixtile-release"
 for k in FIRMWARE_VERSION GIT_COMMIT BUILD_DATE OPENMIOP_PROTOCOL REPOSITORY OPENWRT_VERSION KERNEL_VERSION BOARD TARGET UPDATE_CHANNEL; do
@@ -122,4 +125,5 @@ grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/openwrt2020/f
 grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/bootstrap/sysauth.ut" || fail "bootstrap login lacks the version"
 ok "LuCI login page, footer and overview read /etc/mixtile-release"
 
+[ "$failed" = 0 ] || die "firmware verification failed"
 echo "firmware verified: $(basename "$image")"

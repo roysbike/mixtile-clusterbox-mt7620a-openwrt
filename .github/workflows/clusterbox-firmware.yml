@@ -114,18 +114,20 @@ jobs:
       - name: Collect release artifacts
         run: sudo env PATH="$PWD/staging_dir/host/bin:$PATH" GITHUB_SERVER_URL="$GITHUB_SERVER_URL" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID" ./scripts/clusterbox/collect-release.sh release
 
-      - name: Verify the firmware image
-        run: |
-          sudo chown -R "$(id -u)" release
-          PATH="$PWD/staging_dir/host/bin:$PATH" ./scripts/clusterbox/verify-firmware.sh release \
-            "${MIXTILE_FW_VERSION}" "${MIXTILE_GIT_COMMIT}"
-
       - name: Upload firmware artifacts
+        # also when verification fails, for inspection; never published then
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: clusterbox-firmware-${{ env.MIXTILE_FW_VERSION }}
           if-no-files-found: error
           path: release/*
+
+      - name: Verify the firmware image
+        run: |
+          sudo chown -R "$(id -u)" release
+          PATH="$PWD/staging_dir/host/bin:$PATH" ./scripts/clusterbox/verify-firmware.sh release \
+            "${MIXTILE_FW_VERSION}" "${MIXTILE_GIT_COMMIT}"
 
       - name: Publish the GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
