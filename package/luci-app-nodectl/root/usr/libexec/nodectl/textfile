@@ -1,0 +1,23 @@
+#!/bin/sh
+# Prometheus textfile for node_exporter-lua: chassis + per-node power.
+# Written to /var/run/node-exporter so the lua textfile collector can pick it up.
+
+OUT=/var/run/node-exporter/nodectl.prom
+TMP=$OUT.$$
+
+mkdir -p /var/run/node-exporter
+st=$(/bin/nodectl status --json 2>/dev/null) || exit 0
+
+{
+	echo '# HELP clusterbox_node_power 1 if the slot EN pin is on'
+	echo '# TYPE clusterbox_node_power gauge'
+	echo "$st" | jsonfilter -e '@.nodes[@].id' -e '@.nodes[@].power' 2>/dev/null |
+		awk 'NR%2==1{id=$0} NR%2==0{printf "clusterbox_node_power{id=\"%s\"} %s\n", id, ($0=="true"?1:0)}'
+	echo '# HELP clusterbox_fan_duty Fan PWM duty percent'
+	echo '# TYPE clusterbox_fan_duty gauge'
+	echo "clusterbox_fan_duty $(echo "$st" | jsonfilter -e '@.chassis.fan_duty')"
+	echo '# HELP clusterbox_ext_power Node power rail'
+	echo '# TYPE clusterbox_ext_power gauge'
+	rail=$(echo "$st" | jsonfilter -e '@.chassis.ext_power')
+	echo "clusterbox_ext_power $([ "$rail" = true ] && echo 1 || echo 0)"
+} > "$TMP" && mv "$TMP" "$OUT"

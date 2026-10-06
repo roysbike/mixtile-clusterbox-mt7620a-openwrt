@@ -1,0 +1,42 @@
+#!/bin/sh
+# ttyd instance serving node consoles; access is gated by one-time tokens.
+
+# LuCI Terminal iframes this host:7681. Bind to all addresses so it works
+# from WAN (192.168.70.x) as well as LAN, not only br-lan.
+uci -q delete ttyd.@ttyd[0].interface
+
+uci -q get ttyd.nodectl >/dev/null || {
+	uci -q batch <<-EOF
+		set ttyd.nodectl=ttyd
+		set ttyd.nodectl.port='7682'
+		set ttyd.nodectl.url_arg='1'
+		set ttyd.nodectl.max_clients='8'
+		set ttyd.nodectl.terminal_type='xterm-256color'
+		set ttyd.nodectl.command='/usr/libexec/nodectl/term'
+		commit ttyd
+	EOF
+}
+
+mkdir -p /opt/pxe /var/run/node-exporter
+[ -e /www/pxe ] || ln -s /opt/pxe /www/pxe
+
+for s in blade3-boot nodectl-console nodectl-metrics; do
+	[ -x "/etc/init.d/$s" ] || continue
+	/etc/init.d/"$s" enabled 2>/dev/null || /etc/init.d/"$s" enable
+done
+[ -x /etc/init.d/nodectl-console ] && /etc/init.d/nodectl-console start
+[ -x /etc/init.d/nodectl-metrics ] && /etc/init.d/nodectl-metrics start
+
+if [ -f /etc/config/prometheus-node-exporter-lua ]; then
+	uci -q set prometheus-node-exporter-lua.main.listen_interface='loopback'
+	uci -q set prometheus-node-exporter-lua.main.listen_port='9100'
+	uci -q commit prometheus-node-exporter-lua
+fi
+
+if [ -f /etc/config/prometheus-node-exporter-lua ] && [ -x /etc/init.d/prometheus-node-exporter-lua ]; then
+	uci -q set prometheus-node-exporter-lua.main.textfile_dir='/var/run/node-exporter'
+	uci -q commit prometheus-node-exporter-lua
+fi
+
+rm -f /tmp/luci-indexcache*
+exit 0

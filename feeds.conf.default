@@ -1,4 +1,6 @@
-src-git packages https://git.openwrt.org/feed/packages.git;openwrt-23.05
-src-git luci https://git.openwrt.org/project/luci.git;openwrt-23.05
-src-git routing https://git.openwrt.org/feed/routing.git;openwrt-23.05
-src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-23.05
+# Pinned to the openwrt-23.05 heads of 2026-10-06 so that a tag always
+# builds the same package versions.
+src-git packages https://git.openwrt.org/feed/packages.git^16c320b7fd67c64a80d71fa9016f2ef87e5b01bc
+src-git luci https://git.openwrt.org/project/luci.git^3d39e8c38cfa276d5cdfad7105dbf47933eaed4f
+src-git routing https://git.openwrt.org/feed/routing.git^fa22ff1f05662f2ea456aaff6745ee3da519c1f7
+src-git telephony https://git.openwrt.org/feed/telephony.git^98c8a5aa4624312ed758e2e2b6d4039050a1649d

@@ -14,6 +14,12 @@
 	{% endif %}
 
 	<div class="cbi-map">
+		{% if (version.mixtile): %}
+		<div class="cbi-map-descr" id="mixtile-release" style="margin-bottom:1em">
+			<strong>{{ version.mixtile.name }}</strong><br />
+			Firmware {{ version.mixtile.version }} · commit {{ version.mixtile.commit }}{% if (version.mixtile.protocol): %} · OpenMIOP v{{ version.mixtile.protocol }}{% endif %}
+		</div>
+		{% endif %}
 		<h2 name="content">{{ _('Authorization Required') }}</h2>
 		<div class="cbi-map-descr">
 			{{ _('Please enter your username and password.') }}

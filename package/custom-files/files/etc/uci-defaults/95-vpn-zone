@@ -1,0 +1,27 @@
+#!/bin/sh
+# Firewall zone for OpenVPN tun/tap client tunnels.
+
+uci -q get firewall.vpn >/dev/null && exit 0
+
+uci -q batch <<-EOF
+	set firewall.vpn=zone
+	set firewall.vpn.name='vpn'
+	add_list firewall.vpn.device='tun+'
+	add_list firewall.vpn.device='tap+'
+	set firewall.vpn.input='ACCEPT'
+	set firewall.vpn.output='ACCEPT'
+	set firewall.vpn.forward='ACCEPT'
+	set firewall.vpn.masq='1'
+	set firewall.vpn.mtu_fix='1'
+
+	set firewall.lan_vpn=forwarding
+	set firewall.lan_vpn.src='lan'
+	set firewall.lan_vpn.dest='vpn'
+
+	set firewall.vpn_lan=forwarding
+	set firewall.vpn_lan.src='vpn'
+	set firewall.vpn_lan.dest='lan'
+	commit firewall
+EOF
+
+exit 0

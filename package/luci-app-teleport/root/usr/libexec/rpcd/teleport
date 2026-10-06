@@ -1,0 +1,114 @@
+#!/bin/sh
+# rpcd backend for luci-app-teleport.
+
+. /usr/share/libubox/jshn.sh
+
+BIN=/opt/teleport/teleport
+INSTALL=/usr/libexec/teleport/install
+INSTALL_LOG=/var/log/teleport-install.log
+STATE=/var/run/teleport-install.state
+
+reply() {
+	json_init
+	json_add_int code "$1"
+	json_add_string output "$2"
+	json_dump
+}
+
+agent_pid() {
+	ubus call service list '{"name":"teleport"}' 2>/dev/null |
+		jsonfilter -e '@.teleport.instances.*.pid' | head -n 1
+}
+
+case "$1" in
+list)
+	cat <<-'EOF'
+	{
+		"status": {},
+		"server": { "proxy": "" },
+		"versions": {},
+		"install": { "version": "latest" },
+		"service": { "action": "restart" },
+		"log": { "lines": 200 }
+	}
+	EOF
+	;;
+call)
+	read -r input
+	[ -n "$input" ] || input='{}'
+	json_load "$input"
+
+	case "$2" in
+	status)
+		installed=$(cat /opt/teleport/version 2>/dev/null)
+		[ -n "$installed" ] || [ ! -x "$BIN" ] ||
+			installed=$("$BIN" version 2>/dev/null | sed -n 's/^Teleport v\([^ ]*\).*/\1/p')
+		pid=$(agent_pid)
+		rss=
+		[ -n "$pid" ] && rss=$(sed -n 's/^VmRSS:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$pid/status" 2>/dev/null)
+		json_init
+		json_add_boolean binary "$([ -x "$BIN" ] && echo 1 || echo 0)"
+		json_add_string installed "$installed"
+		json_add_boolean running "$([ -n "$pid" ] && echo 1 || echo 0)"
+		json_add_int pid "${pid:-0}"
+		json_add_int rss_kb "${rss:-0}"
+		json_add_string install_state "$(cat "$STATE" 2>/dev/null)"
+		json_add_boolean installing "$([ -d /var/lock/teleport-install ] && echo 1 || echo 0)"
+		json_add_string disk_free "$(df -h /opt 2>/dev/null | awk 'NR == 2 { print $4 }')"
+		json_dump
+		;;
+	server)
+		json_get_vars proxy
+		[ -n "$proxy" ] || proxy=$(uci -q get teleport.main.proxy_server)
+		case "$proxy" in
+			''|*[!A-Za-z0-9.:-]*) reply 2 "invalid proxy address"; exit 0 ;;
+		esac
+		out=$(uclient-fetch -q -T 8 -O - "https://$proxy/webapi/find" 2>&1)
+		json_init
+		json_add_string proxy "$proxy"
+		json_add_string server_version "$(echo "$out" | jsonfilter -e '@.server_version' 2>/dev/null)"
+		json_add_string min_client_version "$(echo "$out" | jsonfilter -e '@.min_client_version' 2>/dev/null)"
+		json_add_boolean tls_routing "$([ "$(echo "$out" | jsonfilter -e '@.proxy.tls_routing_enabled' 2>/dev/null)" = true ] && echo 1 || echo 0)"
+		json_add_string tunnel_addr "$(echo "$out" | jsonfilter -e '@.proxy.ssh.ssh_tunnel_public_addr' 2>/dev/null)"
+		json_dump
+		;;
+	versions)
+		json_init
+		json_add_array versions
+		for v in $("$INSTALL" --list 2>/dev/null); do
+			json_add_string "" "$v"
+		done
+		json_close_array
+		json_dump
+		;;
+	install)
+		json_get_vars version
+		case "${version:-latest}" in
+			latest|[0-9]*) ;;
+			*) reply 2 "invalid version"; exit 0 ;;
+		esac
+		[ -d /var/lock/teleport-install ] && { reply 3 "installation already running"; exit 0; }
+		echo "running starting" > "$STATE"
+		( "$INSTALL" "${version:-latest}" < /dev/null > "$INSTALL_LOG" 2>&1 & )
+		reply 0 "started"
+		;;
+	service)
+		json_get_vars action
+		case "$action" in
+			start|stop|restart) ;;
+			*) reply 2 "invalid action"; exit 0 ;;
+		esac
+		out=$(/etc/init.d/teleport "$action" 2>&1)
+		reply $? "$out"
+		;;
+	log)
+		json_get_vars lines
+		case "$lines" in ''|*[!0-9]*) lines=200 ;; esac
+		json_init
+		json_add_string log "$(logread -e 'teleport\[' 2>/dev/null | tail -n "$lines")"
+		json_add_string install_log "$(tail -c 4096 "$INSTALL_LOG" 2>/dev/null)"
+		json_dump
+		;;
+	esac
+	;;
+esac

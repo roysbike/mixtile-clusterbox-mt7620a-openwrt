@@ -1,0 +1,8 @@
+#!/bin/sh /etc/rc.common
+# After an update: compare the running firmware with the one that was
+# installed and record the result (mixtile-update status shows it).
+START=99
+
+boot() {
+	/usr/libexec/mixtile-update post-boot >/dev/null 2>&1
+}
