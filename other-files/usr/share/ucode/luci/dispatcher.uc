@@ -137,6 +137,29 @@ function determine_version() {
 		}
 	}
 
+	// Mixtile ClusterBox firmware identity, generated at build time.
+	let mr = {};
+	for (let f = open("/etc/mixtile-release"), l = f?.read?.("line"); l; l = f.read?.("line")) {
+		let kv = split(trim(l), '=', 2);
+
+		if (length(kv) == 2)
+			mr[kv[0]] = trim(kv[1], '"\' \n');
+	}
+
+	if (mr.FIRMWARE_VERSION) {
+		res.mixtile = {
+			name: mr.FIRMWARE_NAME ?? 'Mixtile ClusterBox',
+			version: mr.FIRMWARE_VERSION,
+			commit: mr.GIT_COMMIT_SHORT ?? substr(mr.GIT_COMMIT ?? '', 0, 7),
+			protocol: mr.OPENMIOP_PROTOCOL,
+			url: mr.REPOSITORY ? `${mr.REPOSITORY}/releases/tag/${mr.FIRMWARE_VERSION}` : null
+		};
+		res.distname = res.mixtile.name;
+		res.distversion = `Firmware ${mr.FIRMWARE_VERSION}`;
+		res.distrevision = `commit ${res.mixtile.commit}` + (mr.OPENMIOP_PROTOCOL ? ` · OpenMIOP v${mr.OPENMIOP_PROTOCOL}` : '');
+		res.disturl = res.mixtile.url ?? res.disturl;
+	}
+
 	return res;
 }
 

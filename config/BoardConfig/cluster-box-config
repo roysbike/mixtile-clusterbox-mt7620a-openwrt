@@ -2782,6 +2782,10 @@ CONFIG_PACKAGE_luci-app-nodectl=y
 # Do not enable it in the default image. Build/install separately if needed.
 # CONFIG_PACKAGE_luci-app-teleport is not set
 CONFIG_PACKAGE_nodectl=y
+CONFIG_PACKAGE_openmiop=y
+CONFIG_PACKAGE_mixtile-release=y
+CONFIG_PACKAGE_mixtile-update=y
+CONFIG_PACKAGE_luci-app-mixtile-update=y
 # end of Custom Component
 
 #
