@@ -58,7 +58,7 @@ jobs:
     steps:
       - name: Maximize build space
         if: env.SELF_HOSTED != 'true'
-        uses: easimon/maximize-build-space@master
+        uses: easimon/maximize-build-space@v10
         with:
           root-reserve-mb: 4096
           swap-size-mb: 1024
@@ -75,7 +75,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # Self-hosted: keep the build tree (toolchain, host tools,
@@ -120,7 +120,7 @@ jobs:
 
       - name: Restore download cache
         if: env.SELF_HOSTED != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dl
           key: ${{ runner.os }}-clusterbox-v120-dl-${{ hashFiles('build.sh', 'feeds.conf.default', 'config/BoardConfig/cluster-box-config', 'package/openmiop/Makefile') }}
@@ -179,7 +179,7 @@ jobs:
       - name: Upload firmware artifacts
         # also when verification fails, for inspection; never published then
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clusterbox-firmware-${{ env.MIXTILE_FW_VERSION }}
           if-no-files-found: error
