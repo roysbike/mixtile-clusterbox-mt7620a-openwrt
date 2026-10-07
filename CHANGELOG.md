@@ -3,6 +3,45 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.0-rc.2] - 2026-10-07
+
+Part of OpenMIOP Stack v0.1.0-rc.2 (protocol v4, with pcie-ep-net and
+mixtile-talos v0.1.0-rc.2).
+
+### Changed
+
+- Release assets follow the OpenMIOP Stack naming:
+  `openmiop-<version>-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin`,
+  plus `clusterbox-firmware.json`, `mixtile-update`, `BUILD-INFO.txt` and
+  `SHA256SUMS` only. Packages, the package manifest and buildinfo files are
+  CI artifacts, no longer release assets (GitHub also renamed the `~` in
+  the `openmiop` package file name, which broke `sha256sum -c`).
+- `openmiop` package built from pcie-ep-net `0817d7c` (tag v0.1.0-rc.2);
+  the BMC helper source did not change since rc.1.
+
+### Tested
+
+- v0.1.0-rc.1 on the lab BMC (installed through LuCI *Flash Firmware*):
+  boots, `/etc/mixtile-release` names the tag and commit, the LuCI login
+  page shows `Firmware v0.1.0-rc.1 · commit a328c07 · OpenMIOP v4`,
+  `mixtile-update status` works, the OpenMIOP fabric runs with four Talos
+  blades; NAT for the blades (10.20.0.0/24 → WAN) and DNAT to the cluster
+  (6443, 80, 443) configured on top of it.
+- Release check, download and `verify-local` of a release, and rejection
+  of a corrupted image, on that BMC.
+
+### Known limitations
+
+- Flashing through LuCI does not clean the overlay: files copied by hand
+  on older firmware keep shadowing the new ones (seen on the lab BMC:
+  `/usr/bin/openmiop-rc`, `/etc/init.d/openmiop`). `mixtile-update
+  install`/`install-local` remove them.
+- `mixtile-update install` and the microSD recovery are still not
+  hardware-tested (rc.1 → rc.2 is the first OTA update).
+- No HTTPS in LuCI yet (no `px5g`); planned.
+- `uclient-fetch` uses mbedTLS 2.28 (TLS 1.2): it cannot talk to the
+  Talos and Kubernetes APIs, which require TLS 1.3.
+
 ## [0.1.0-rc.1] - 2026-10-06
 
 First release candidate of this firmware as part of OpenMIOP Stack
@@ -115,4 +154,5 @@ v0.1.0-rc.1.
   the image as a prebuilt upstream binary; it is not built here and is
   not used by OpenMIOP.
 
+[0.1.0-rc.2]: https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.0-rc.1

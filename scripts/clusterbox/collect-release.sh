@@ -1,12 +1,14 @@
 #!/bin/bash
-# collect-release.sh OUTDIR
-# After "./build.sh firmware": gather the release artifacts into OUTDIR —
-# the SD-card sysupgrade image, the ClusterBox packages, the build
-# manifests, clusterbox-firmware.json (read by mixtile-update),
-# BUILD-INFO.txt and SHA256SUMS.
+# collect-release.sh OUTDIR [EXTRASDIR]
+# After "./build.sh firmware": gather what a release publishes into OUTDIR
+# — the SD-card sysupgrade image, clusterbox-firmware.json (read by
+# mixtile-update), the mixtile-update script (first install),
+# BUILD-INFO.txt and SHA256SUMS — and the build leftovers (packages,
+# manifest, buildinfo) into EXTRASDIR (CI artifact only, not released).
 set -euo pipefail
 
 out=${1:?outdir}
+extras=${2:-$out-extras}
 top=$(cd "$(dirname "$0")/../.." && pwd)
 tdir=$top/bin/targets/ramips/mt7620
 pdir=$top/bin/packages/mipsel_24kc/base
@@ -21,20 +23,23 @@ unsquashfs -q -n -d "$rel/root" "$rel/rootfs.sqsh" etc/mixtile-release >/dev/nul
 # shellcheck disable=SC1091
 . "$rel/root/etc/mixtile-release"
 
-mkdir -p "$out"
-image=mixtile-clusterbox-v120-${FIRMWARE_VERSION}-sysupgrade-sd.bin
+mkdir -p "$out" "$extras"
+# openmiop-<version>-<platform>-<os>-<arch>-<kind>.bin, like the other
+# OpenMIOP Stack releases.
+owrt=${OPENWRT_VERSION%%-*}
+image=openmiop-${FIRMWARE_VERSION#v}-clusterbox-bmc-openwrt-${owrt}-mipsel-sysupgrade.bin
 cp "$src" "$out/$image"
+# The update backend, for a first install from firmware that lacks it.
+install -m 0755 "$top/package/mixtile-update/files/mixtile-update" "$out/mixtile-update"
 
 for p in openmiop mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl; do
 	f=$(ls "$pdir"/${p}_*.ipk 2>/dev/null | head -n1)
 	[ -n "$f" ] || { echo "missing package $p" >&2; exit 1; }
-	cp "$f" "$out/"
+	cp "$f" "$extras/"
 done
-cp "$tdir"/*.manifest "$out/firmware.manifest"
-# The update backend, for a first install from firmware that lacks it.
-install -m 0755 "$top/package/mixtile-update/files/mixtile-update" "$out/mixtile-update"
+cp "$tdir"/*.manifest "$extras/firmware.manifest"
 for f in config.buildinfo feeds.buildinfo version.buildinfo; do
-	[ -f "$tdir/$f" ] && cp "$tdir/$f" "$out/"
+	[ -f "$tdir/$f" ] && cp "$tdir/$f" "$extras/"
 done
 
 sha=$(sha256sum "$out/$image" | cut -d' ' -f1)
@@ -74,5 +79,7 @@ EOJ
 	sed 's/^/  /' "$tdir/feeds.buildinfo" 2>/dev/null || true
 } > "$out/BUILD-INFO.txt"
 
-(cd "$out" && sha256sum -- * | grep -v ' SHA256SUMS$' > SHA256SUMS)
+(cd "$out" && sha256sum -- "$image" clusterbox-firmware.json mixtile-update BUILD-INFO.txt > SHA256SUMS)
+(cd "$extras" && sha256sum -- * > SHA256SUMS)
 cat "$out/BUILD-INFO.txt" "$out/SHA256SUMS"
+ls -la "$out" "$extras"
