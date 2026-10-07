@@ -139,6 +139,20 @@ jobs:
 
       - name: Prepare feeds
         run: |
+          # Persistent tree (self-hosted): a feed must sit exactly on its
+          # pinned commit. A clone cut off by a cancelled run looks
+          # present to 'feeds update' but is incomplete; clone it again.
+          if [ "${SELF_HOSTED}" = true ]; then
+            grep -E '^src-git' feeds.conf.default | while read -r _ name spec; do
+              want=${spec##*^}
+              have=$(git -C "feeds/${name}" rev-parse HEAD 2>/dev/null || true)
+              if [ "${have}" != "${want}" ] || ! git -C "feeds/${name}" diff --quiet HEAD 2>/dev/null; then
+                echo "feed ${name}: '${have}' is not ${want}, cloning again"
+                sudo rm -rf "feeds/${name}" "feeds/${name}.index" "feeds/${name}.targetindex" \
+                  "feeds/${name}.tmp" "package/feeds/${name}"
+              fi
+            done
+          fi
           ./build.sh feeds_update
           ./build.sh feeds_install
 
