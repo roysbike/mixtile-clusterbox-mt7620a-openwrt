@@ -3,6 +3,43 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.0-rc.3] - 2026-10-07
+
+BMC firmware only; the OpenMIOP helper is the same as in rc.2
+(pcie-ep-net v0.1.0-rc.2, protocol v4). It also works with blades on
+pcie-ep-net v0.2 development builds.
+
+### Added
+
+- PCIe link speed and width per blade: `nodectl status` has a LINK column
+  (e.g. `Gen3 x2`, or `Gen3 x1/x2!` when a link trained below what both
+  ends support) and the JSON status `link_gen`, `link_width`,
+  `link_max_gen`, `link_max_width`; LuCI *Cluster* shows it as a green or
+  orange badge next to the PCIe state.
+
+### Changed
+
+- LuCI *Cluster*: no "Temp: no sensor" line; Temp appears only when the
+  host or the chassis reports a temperature.
+
+### Fixed
+
+- `mixtile-update install` pruned nothing from the overlay (the file list
+  went to the wrong command), so after an update old hand-copied files
+  kept shadowing the new firmware (seen after rc.1 -> rc.2 on the lab
+  BMC). It now removes exactly the overlay files that shadow (or, as
+  whiteouts, hide) a firmware file, never `/etc/uci-defaults` whiteouts,
+  and leaves files the firmware does not ship (tools and packages
+  installed later, e.g. the Teleport agent).
+
+### Known limitations
+
+- An update runs the *installed* `mixtile-update`; rc.2 has the prune bug,
+  so from rc.2 copy rc.3's `mixtile-update` to the BMC first (see the
+  release notes) or check `mixtile-update prune-preview` after updating.
+- A BMC reboot (any update) drops the PCIe fabric for all blades for a few
+  minutes; see the release notes.
+
 ## [0.1.0-rc.2] - 2026-10-07
 
 Part of OpenMIOP Stack v0.1.0-rc.2 (protocol v4, with pcie-ep-net and
@@ -154,5 +191,6 @@ v0.1.0-rc.1.
   the image as a prebuilt upstream binary; it is not built here and is
   not used by OpenMIOP.
 
+[0.1.0-rc.3]: https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.0-rc.1

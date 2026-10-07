@@ -230,18 +230,19 @@ keep_extra() {
 	fi
 }
 
-# Remove every file of the overlay that is not kept, so the new
-# firmware's files are not shadowed by the old ones. This board's
-# sysupgrade writes kernel and rootfs only; the ext4 overlay on
-# mmcblk0p3 survives the update as it is. With "preview", only print
-# what would be removed.
+# Remove the overlay files that shadow firmware files (or, as whiteouts,
+# hide them), unless kept, so the new firmware's versions take effect.
+# This board's sysupgrade writes kernel and rootfs only; the ext4
+# overlay on mmcblk0p3 survives the update as it is. Files the firmware
+# does not ship (packages and tools installed later) are not touched.
+# With "preview", only print what would be removed.
 prune_overlay() {
 	local upper=/overlay/upper keep=$WORK/keep.list rm=$WORK/prune.list f
 	[ -d "$upper" ] || return 0
 	sysupgrade -l > "$keep" 2>/dev/null
 	[ -s "$keep" ] || return 1
-	( cd "$upper" && find . \( -type f -o -type l -o -type c \) ) | sed 's|^\.||' |
 	keep_extra > "$WORK/keep.extra"
+	( cd "$upper" && find . \( -type f -o -type l -o -type c \) ) | sed 's|^\.||' |
 	awk -v keep="$keep" -v extra="$WORK/keep.extra" '
 		BEGIN {
 			while ((getline l < keep) > 0) k[l] = 1
@@ -254,8 +255,16 @@ prune_overlay() {
 		{
 			if ($0 in k) next
 			for (i = 1; i <= np; i++) if (index($0, p[i]) == 1) next
+			# Whiteouts of uci-defaults scripts that already ran: removing
+			# them would run those scripts again on the next boot.
+			if (index($0, "/etc/uci-defaults/") == 1) next
 			print
-		}' > "$rm"
+		}' |
+	while read -r f; do
+		if [ -e "/rom$f" ] || [ -L "/rom$f" ]; then
+			echo "$f"
+		fi
+	done > "$rm"
 	[ "$1" = preview ] && { cat "$rm"; return 0; }
 	while read -r f; do
 		rm -f "$upper$f"

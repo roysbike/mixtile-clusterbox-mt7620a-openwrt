@@ -265,16 +265,16 @@ static int node_pcie(int n)
 }
 
 /*
- * Data link state of the switch port in front of the node. Reads the PCIe
- * Link Status register (DLActive, bit 13) of the ASM2824 downstream port.
+ * Link Capabilities and Link Status of the PCI Express capability in a
+ * device's config space (sysfs, root only beyond the first 64 bytes).
  */
-static int node_pcie_link(int n)
+static int pcie_link_regs(const char *dev, unsigned int *lnkcap, unsigned int *lnksta)
 {
 	unsigned char cfg[256];
-	char path[64];
+	char path[80];
 	int fd, len, cap, guard;
 
-	snprintf(path, sizeof(path), "/sys/bus/pci/devices/0000:02:%02x.0/config", PCI_PORT[n - 1]);
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/config", dev);
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
@@ -284,10 +284,85 @@ static int node_pcie_link(int n)
 		return -1;
 	for (cap = cfg[0x34] & 0xfc, guard = 0; cap && cap + 0x14 <= len && guard < 48;
 	     cap = cfg[cap + 1] & 0xfc, guard++) {
-		if (cfg[cap] == 0x10)
-			return ((cfg[cap + 0x12] | cfg[cap + 0x13] << 8) >> 13) & 1;
+		if (cfg[cap] == 0x10) {
+			*lnkcap = cfg[cap + 0x0c] | cfg[cap + 0x0d] << 8 |
+				  cfg[cap + 0x0e] << 16 | (unsigned int)cfg[cap + 0x0f] << 24;
+			*lnksta = cfg[cap + 0x12] | cfg[cap + 0x13] << 8;
+			return 0;
+		}
 	}
 	return -1;
+}
+
+static void port_dev(int n, char *buf, size_t len)
+{
+	snprintf(buf, len, "0000:02:%02x.0", PCI_PORT[n - 1]);
+}
+
+/*
+ * Data link state of the switch port in front of the node: DLActive
+ * (Link Status bit 13) of the ASM2824 downstream port.
+ */
+static int node_pcie_link(int n)
+{
+	unsigned int cap, sta;
+	char dev[16];
+
+	port_dev(n, dev, sizeof(dev));
+	if (pcie_link_regs(dev, &cap, &sta))
+		return -1;
+	return (sta >> 13) & 1;
+}
+
+struct link_info {
+	int gen, width;			/* negotiated, 0: unknown */
+	int max_gen, max_width;		/* what both ends support, 0: unknown */
+};
+
+/*
+ * Negotiated speed and width of the node's link, from the switch port's
+ * Link Status, and what both ends support (the lower of the port's and,
+ * when it is enumerated, the endpoint's Link Capabilities): a Blade 3
+ * has two lanes behind a four-lane switch port.
+ */
+static void node_link_info(int n, struct link_info *li)
+{
+	unsigned int cap, sta, ecap, esta;
+	char dev[16];
+
+	memset(li, 0, sizeof(*li));
+	port_dev(n, dev, sizeof(dev));
+	if (pcie_link_regs(dev, &cap, &sta) || !((sta >> 13) & 1))
+		return;
+	li->gen = sta & 0xf;
+	li->width = (sta >> 4) & 0x3f;
+	li->max_gen = cap & 0xf;
+	li->max_width = (cap >> 4) & 0x3f;
+	snprintf(dev, sizeof(dev), "0000:%02x:00.0", PCI_BUS[n - 1]);
+	if (!pcie_link_regs(dev, &ecap, &esta)) {
+		if ((int)(ecap & 0xf) < li->max_gen)
+			li->max_gen = ecap & 0xf;
+		if ((int)((ecap >> 4) & 0x3f) < li->max_width)
+			li->max_width = (ecap >> 4) & 0x3f;
+	}
+}
+
+static void link_text(const struct link_info *li, char *buf, size_t len)
+{
+	if (!li->gen || !li->width)
+		snprintf(buf, len, "-");
+	else if (li->gen < li->max_gen || li->width < li->max_width)
+		snprintf(buf, len, "Gen%d x%d/x%d!", li->gen, li->width, li->max_width);
+	else
+		snprintf(buf, len, "Gen%d x%d", li->gen, li->width);
+}
+
+static void json_int_or_null(const char *key, int v, int comma)
+{
+	if (v > 0)
+		printf("\"%s\":%d%s", key, v, comma ? "," : "");
+	else
+		printf("\"%s\":null%s", key, comma ? "," : "");
 }
 
 static void node_tty(int n, char *buf, size_t len)
@@ -728,7 +803,8 @@ static int cmd_status(struct opts *o)
 {
 	pid_t pids[NODES + 1];
 	int n, first = 1, power, pcie, link, prz, up, port;
-	char tty[32], opbuf[32], name[16], check[16], ext[8];
+	char tty[32], opbuf[32], name[16], check[16], ext[8], ltext[24];
+	struct link_info li;
 	const char *busy, *ip;
 
 	for (n = 1; n <= NODES; n++)
@@ -737,8 +813,8 @@ static int cmd_status(struct opts *o)
 	if (o->json)
 		printf("{\"nodes\":[");
 	else
-		printf("%-4s %-10s %-6s %-9s %-4s %-16s %-10s %s\n",
-		       "NODE", "NAME", "POWER", "PCIE", "PRZ", "IP", "CHECK", "STATE");
+		printf("%-4s %-10s %-6s %-9s %-13s %-4s %-16s %-10s %s\n",
+		       "NODE", "NAME", "POWER", "PCIE", "LINK", "PRZ", "IP", "CHECK", "STATE");
 
 	for (n = 1; n <= NODES; n++) {
 		if (!(o->mask & (1u << n)))
@@ -747,6 +823,8 @@ static int cmd_status(struct opts *o)
 		power = node_power(n);
 		pcie = node_pcie(n);
 		link = node_pcie_link(n);
+		node_link_info(n, &li);
+		link_text(&li, ltext, sizeof(ltext));
 		prz = gpio_get(PRZ_OFF[n - 1]);
 		ip = node_cfg(n, "ipaddr", NULL);
 		port = atoi(node_cfg(n, "check_port", "0"));
@@ -763,6 +841,10 @@ static int cmd_status(struct opts *o)
 			json_str("name", node_cfg(n, "name", name), 1);
 			printf("\"power\":%s,\"pcie\":%s,\"pcie_link\":%s,\"prz\":%d,",
 			       bool_json(power), bool_json(pcie), bool_json(link), prz);
+			json_int_or_null("link_gen", li.gen, 1);
+			json_int_or_null("link_width", li.width, 1);
+			json_int_or_null("link_max_gen", li.max_gen, 1);
+			json_int_or_null("link_max_width", li.max_width, 1);
 			json_str("ipaddr", ip, 1);
 			json_str("check", ip ? check : NULL, 1);
 			printf("\"reachable\":%s,", ip && power == 1 ? bool_json(up > 0) : "null");
@@ -773,9 +855,9 @@ static int cmd_status(struct opts *o)
 			       bool_json(access(tty, F_OK) == 0), bool_json(console_served(n)),
 			       bool_json(atoi(node_cfg(n, "autostart", "1"))));
 		} else {
-			printf("%-4d %-10s %-6s %-9s %-4d %-16s %-10s %s\n", n,
+			printf("%-4d %-10s %-6s %-9s %-13s %-4d %-16s %-10s %s\n", n,
 			       node_cfg(n, "name", name), power == 1 ? "on" : "off",
-			       pcie ? "endpoint" : link == 1 ? "link" : "down", prz,
+			       pcie ? "endpoint" : link == 1 ? "link" : "down", ltext, prz,
 			       ip ? ip : "-", !ip ? "-" : up > 0 ? "ok" : "fail",
 			       busy ? busy : power != 1 ? "off" :
 			       up > 0 ? "online" : ip ? "booting" : "powered");
