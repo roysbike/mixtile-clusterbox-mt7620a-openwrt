@@ -5,12 +5,12 @@ include $(TOPDIR)/rules.mk
 # config/resource files and a TAP device); no BMC kernel module is
 # needed besides kmod-tun.
 PKG_NAME:=openmiop
-PKG_VERSION:=0.1.0~rc.1
+PKG_VERSION:=0.1.0~rc.2
 PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=922389d7c836ac6cf08737de76381dffac64cc29
+PKG_SOURCE_VERSION:=0817d7cd4b962d6cb28f24aefa1db22ca87412ad
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=8108a9436aa5bf7c548c20d056dbf451dacc0b9dde3612d7e19a167a37e0253d
+PKG_HASH:=f755eac068228b238c025f802bf507e5ab1242b761d1312bc9f221f876681ae1
 PKG_BUILD_DIR:=$(BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
