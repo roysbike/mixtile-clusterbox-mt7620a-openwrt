@@ -367,11 +367,14 @@ return view.extend({
 		]);
 	},
 
-	tempText: function(c, host) {
+	/* The Cluster Box has no temperature sensor; show Temp only when
+	 * the host or the chassis reports one.
+	 */
+	tempStat: function(c, host) {
 		var mc = (host && host.temp_mc != null) ? host.temp_mc : (c && c.temp_mc);
 		if (mc == null)
-			return E('em', {}, _('no sensor'));
-		return (mc / 1000).toFixed(1) + ' °C';
+			return '';
+		return this.stat(_('Temp'), (mc / 1000).toFixed(1) + ' °C');
 	},
 
 	renderChassis: function(c, host) {
@@ -389,7 +392,7 @@ return view.extend({
 		return [
 			this.stat(_('Rail'), c.ext_power == null ? '-' :
 				badge(c.ext_power ? _('on') : _('off'), c.ext_power ? '#2a2' : '#888')),
-			this.stat(_('Temp'), this.tempText(c, host)),
+			this.tempStat(c, host),
 			this.stat(_('Load'), host.loadavg || '-'),
 			this.stat(_('Memory'), mem || '-'),
 			this.stat(_('Up'), host.uptime != null ? fmtUptime(host.uptime) : '-'),
