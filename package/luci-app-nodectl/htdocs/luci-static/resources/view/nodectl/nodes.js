@@ -71,12 +71,30 @@ function badge(text, color) {
 	}, text);
 }
 
+/* Negotiated PCIe speed and width; orange when below what both ends
+ * support (a lane or a speed grade did not train).
+ */
+function linkBadge(n) {
+	var full, text;
+
+	if (!n.link_gen || !n.link_width)
+		return '';
+	full = (!n.link_max_gen || n.link_gen >= n.link_max_gen) &&
+	       (!n.link_max_width || n.link_width >= n.link_max_width);
+	text = 'Gen%d x%d'.format(n.link_gen, n.link_width);
+	if (!full)
+		text += ' / x%d'.format(n.link_max_width || n.link_width);
+	return E('span', { 'title': full ? _('Full link speed and width')
+				       : _('Link trained below what both ends support') },
+		 [ ' ', badge(text, full ? '#2a2' : '#e07000') ]);
+}
+
 function pcieText(n) {
 	if (n.pcie_link == null)
 		return '-';
 	if (!n.pcie_link)
 		return _('down');
-	return n.pcie ? _('up') : _('link, no device');
+	return [ n.pcie ? _('up') : _('link, no device'), linkBadge(n) ];
 }
 
 function cleanTerm(s) {
