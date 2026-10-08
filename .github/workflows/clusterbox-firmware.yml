@@ -3,7 +3,9 @@ name: ClusterBox firmware
 # Pull requests to v120 (the default branch) build and verify the
 # firmware; v* tags build it
 # from the tagged commit, verify it and publish the GitHub release that
-# mixtile-update on the BMC reads.
+# mixtile-update on the BMC reads. The Teleport agent (version pinned in
+# scripts/teleport-version) is built alongside and attached to that
+# release as an extra asset.
 on:
   pull_request:
     branches: [v120]
@@ -225,3 +227,65 @@ jobs:
             --title "ClusterBox BMC firmware ${GITHUB_REF_NAME}" \
             --notes-file "release-notes/${GITHUB_REF_NAME}.md" \
             release/*
+
+  # The Teleport agent for the BMC (linux/mipsle softfloat, static musl),
+  # at the version pinned in scripts/teleport-version. An extra asset of
+  # the firmware release, built next to the firmware on a GitHub runner;
+  # a failure here does not hold the firmware back.
+  teleport:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install mipsel musl soft-float toolchain
+        run: |
+          id=$(docker create muslcc/x86_64:mipsel-linux-muslsf /bin/true)
+          sudo mkdir -p /opt/muslsf
+          docker export "$id" | sudo tar -x -C /opt/muslsf
+          docker rm "$id"
+          /opt/muslsf/bin/gcc --version | head -1
+
+      - name: Build
+        env:
+          CC: /opt/muslsf/bin/gcc
+          CXX: /opt/muslsf/bin/g++
+          READELF: /opt/muslsf/bin/readelf
+          STRIP: /opt/muslsf/bin/strip
+          WORK: ${{ runner.temp }}/teleport-build
+        run: |
+          mkdir -p "$WORK"
+          sh scripts/build-teleport-mipsel.sh "$(cat scripts/teleport-version)" out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: teleport-agent
+          path: out/
+          if-no-files-found: error
+
+  # Attach the agent to the firmware release once both exist.
+  teleport-asset:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [firmware, teleport]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: teleport-agent
+          path: out
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" out/* -R "${GITHUB_REPOSITORY}" --clobber

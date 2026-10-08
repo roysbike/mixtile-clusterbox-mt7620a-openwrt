@@ -22,6 +22,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Releases are about the firmware: the Teleport agent no longer gets its
+  own release (built from "latest" Teleport, it showed up as the
+  repository's latest release). Each firmware tag builds the agent at
+  the version in `scripts/teleport-version` (18.10.0) next to the
+  firmware and attaches `teleport-<version>-linux-mipsel.gz` (+ `.sha256`)
+  to the firmware release. LuCI *Services → Teleport* finds agents in
+  any release by file name, old and new.
+- Release notes follow `release-notes/TEMPLATE.md`: what's new, what is
+  inside (component versions), download, update, known issues, tests.
+- CI: the firmware identity (`/etc/mixtile-release`) is rebuilt on every
+  self-hosted build; pull requests build for `v120` only (`main` is gone).
 - Teleport: the default `clusterbox` web app uses URI `luci`, which follows
   the HTTP port of uhttpd (`uhttpd.main.listen_http`), so LuCI moved to
   e.g. 8080 is still published. The agent reloads when uhttpd changes.
