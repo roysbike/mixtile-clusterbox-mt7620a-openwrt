@@ -33,7 +33,8 @@ cp "$src" "$out/$image"
 install -m 0755 "$top/package/mixtile-update/files/mixtile-update" "$out/mixtile-update"
 
 for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl; do
-	f=$(ls "$pdir"/${p}_*.ipk 2>/dev/null | head -n1)
+	# Kernel packages land with the target, the rest per architecture.
+	f=$(ls "$pdir"/${p}_*.ipk "$tdir"/packages/${p}_*.ipk 2>/dev/null | head -n1 || true)
 	[ -n "$f" ] || { echo "missing package $p" >&2; exit 1; }
 	cp "$f" "$extras/"
 done
