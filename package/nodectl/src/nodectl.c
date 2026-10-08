@@ -513,12 +513,20 @@ static const char *node_busy(int n, char *buf, size_t len)
  * and it will leave the blade alone until its link has come back.
  */
 #define OPENMIOP_RELEASE "/var/run/openmiop-release.02:%02x.0"
+/* The kernel module (omi-rc) returns from this write once released. */
+#define OMI_RC_RELEASE "/sys/module/omi_rc/parameters/release"
 
 static void pcie_release(int n)
 {
 	char path[64];
 	int t;
 
+	if (!access(OMI_RC_RELEASE, F_OK)) {
+		snprintf(path, sizeof(path), "02:%02x.0\n", PCI_PORT[n - 1]);
+		if (write_file(OMI_RC_RELEASE, path))
+			logmsg(LOG_WARNING, "node %d: omi-rc did not release the PCIe link", n);
+		return;
+	}
 	snprintf(path, sizeof(path), OPENMIOP_RELEASE, PCI_PORT[n - 1]);
 	if (write_file(path, "1\n"))
 		return;

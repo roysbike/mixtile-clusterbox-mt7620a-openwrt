@@ -24,6 +24,15 @@ v0.2.0-rc.2 (protocol v4).
   timestamp; link loss dumps link and AER status of the root and switch
   ports.
 
+### Added
+
+- `kmod-omi-rc` (pcie-ep-net `drivers/omi-rc`, built as a separate
+  package, not loaded automatically yet): the Cluster Box side of
+  OpenMIOP in the kernel, in push mode, so the BMC never reads a blade's
+  BAR. Needs push-mode blades (pcie-ep-net `claude/rc-push`).
+  `nodectl reset`/`poweroff` release blades through its `release`
+  parameter when it is loaded.
+
 ### Changed
 
 - Releases are about the firmware: the Teleport agent no longer gets its
