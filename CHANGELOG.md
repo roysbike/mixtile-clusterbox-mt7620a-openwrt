@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   timestamp; link loss dumps link and AER status of the root and switch
   ports.
 
+### Added
+
+- `kmod-omi-rc` (pcie-ep-net `drivers/omi-rc`, built as a separate
+  package, not loaded automatically yet): the Cluster Box side of
+  OpenMIOP in the kernel, in push mode, so the BMC never reads a blade's
+  BAR. Needs push-mode blades (pcie-ep-net `claude/rc-push`).
+  `nodectl reset`/`poweroff` release blades through its `release`
+  parameter when it is loaded.
+
 ### Changed
 
 - Teleport: the default `clusterbox` web app uses URI `luci`, which follows
