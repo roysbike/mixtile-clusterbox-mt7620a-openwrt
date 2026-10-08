@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   up to 1 s for it. A BAR read in flight when a blade's link drops
   without warning stops the MT7620A root complex until the Cluster Box
   reboots.
-- openmiop-rc (pcie-ep-net `claude/fabric-resilience`): no request to a
+- openmiop-rc (pcie-ep-net v0.2.0-rc.2): no request to a
   blade whose link is not up and stable, judged by Data Link Layer Link
   Active of its switch port; after a leave or a release, the blade is
   probed only once its link dropped and came back. Log lines carry a
