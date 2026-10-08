@@ -5,6 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- PCIe fabric outages after a blade reset or power cut: `nodectl reset`
+  and `nodectl poweroff` (also `reboot --hard`) first ask openmiop-rc to
+  release the blade (`/var/run/openmiop-release.<switch port>`) and wait
+  up to 1 s for it. A BAR read in flight when a blade's link drops
+  without warning stops the MT7620A root complex until the Cluster Box
+  reboots.
+- openmiop-rc (pcie-ep-net `claude/fabric-resilience`): no request to a
+  blade whose link is not up and stable, judged by Data Link Layer Link
+  Active of its switch port; after a leave or a release, the blade is
+  probed only once its link dropped and came back. Log lines carry a
+  timestamp; link loss dumps link and AER status of the root and switch
+  ports.
+
 ### Changed
 
 - Teleport: the default `clusterbox` web app uses URI `luci`, which follows
