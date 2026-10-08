@@ -179,6 +179,12 @@ jobs:
         if: env.SELF_HOSTED == 'true' && startsWith(github.ref, 'refs/tags/v')
         run: sudo make clean
 
+      - name: Fresh firmware identity (self-hosted)
+        # The persistent tree keeps packages that did not change; the
+        # identity (/etc/mixtile-release) must name this commit.
+        if: env.SELF_HOSTED == 'true'
+        run: sudo make package/mixtile-release/clean
+
       - name: Build firmware
         env:
           MAKE_VERBOSE: ""
