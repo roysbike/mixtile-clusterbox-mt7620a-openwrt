@@ -3,7 +3,11 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.1.0-rc.4] - 2026-10-08
+
+A blade that reboots, is reset or loses power through `nodectl` no
+longer takes the PCIe fabric down. OpenMIOP helper from pcie-ep-net
+v0.2.0-rc.2 (protocol v4).
 
 ### Fixed
 
