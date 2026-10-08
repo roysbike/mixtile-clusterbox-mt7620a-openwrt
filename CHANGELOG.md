@@ -3,6 +3,14 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Teleport: the default `clusterbox` web app uses URI `luci`, which follows
+  the HTTP port of uhttpd (`uhttpd.main.listen_http`), so LuCI moved to
+  e.g. 8080 is still published. The agent reloads when uhttpd changes.
+
 ## [0.1.0-rc.3] - 2026-10-07
 
 BMC firmware only; the OpenMIOP helper is the same as in rc.2

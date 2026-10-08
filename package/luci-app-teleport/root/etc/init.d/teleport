@@ -27,6 +27,21 @@ add_labels() {
 	json_close_object
 }
 
+# "luci" as an app URI means this box's own web UI, at whatever address
+# uhttpd serves plain HTTP on (stock 80, often moved to e.g. 8080).
+luci_uri() {
+	local l host port
+
+	l=$(uci -q get uhttpd.main.listen_http)
+	l=${l%% *}
+	port=${l##*:}
+	host=${l%:*}
+	case "$host" in
+	""|0.0.0.0|"[::]") host=127.0.0.1 ;;
+	esac
+	echo "http://$host:${port:-80}"
+}
+
 add_app() {
 	local s=$1 enabled name uri v
 
@@ -34,6 +49,7 @@ add_app() {
 	config_get name "$s" name
 	config_get uri "$s" uri
 	[ "$enabled" = 1 ] && [ -n "$name" ] && [ -n "$uri" ] || return 0
+	[ "$uri" = luci ] && uri=$(luci_uri)
 
 	json_add_object
 	json_add_string name "$name"
@@ -208,5 +224,5 @@ start_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger teleport
+	procd_add_reload_trigger teleport uhttpd
 }
