@@ -1,12 +1,12 @@
 name: ClusterBox firmware
 
-# Pull requests to v120 (the default branch) or main build and verify the
+# Pull requests to v120 (the default branch) build and verify the
 # firmware; v* tags build it
 # from the tagged commit, verify it and publish the GitHub release that
 # mixtile-update on the BMC reads.
 on:
   pull_request:
-    branches: [v120, main]
+    branches: [v120]
   push:
     tags: ["v*"]
   workflow_dispatch:
