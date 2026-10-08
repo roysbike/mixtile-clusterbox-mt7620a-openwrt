@@ -10,7 +10,7 @@ jobs:
 
     steps:
       - name: Get more disk space
-        uses: easimon/maximize-build-space@master
+        uses: easimon/maximize-build-space@v10
         with:
           root-reserve-mb: 2048
           swap-size-mb: 1024
@@ -21,7 +21,7 @@ jobs:
           remove-docker-images: 'true'
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout LFS
         shell: bash
@@ -52,7 +52,7 @@ jobs:
           sudo ./build.sh firmware
   
       - name: Upload image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openwrt_image
           path: output/*

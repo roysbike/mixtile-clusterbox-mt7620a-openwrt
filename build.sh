@@ -105,7 +105,14 @@ function build_firmware()
 
 	trap 'rm -rf "$COMMON_DIR/files"' RETURN
 	cp -a "$COMMON_DIR/other-files" "$COMMON_DIR/files"
-	make -j1 V=s
+	# MAKE_JOBS (default 1) builds in parallel; MAKE_VERBOSE (default V=s)
+	# is passed to make. A failed parallel build is retried with -j1 V=s,
+	# the usual way to get a readable log of what broke.
+	if ! make -j"${MAKE_JOBS:-1}" ${MAKE_VERBOSE-V=s}; then
+		[ "${MAKE_JOBS:-1}" = 1 ] && return 1
+		echo "parallel build failed, retrying with -j1 V=s"
+		make -j1 V=s || return 1
+	fi
 	[ -f "$TARGET_BIN" ]
 	mkdir -p output
 	cp "$TARGET_BIN" "$COMMON_DIR/output/image-release-clusterbox-openwrt23-$(date '+%Y%m%d').bin"

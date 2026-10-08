@@ -1,11 +1,12 @@
 name: ClusterBox firmware
 
-# Pull requests to main build and verify the firmware; v* tags build it
+# Pull requests to v120 (the default branch) or main build and verify the
+# firmware; v* tags build it
 # from the tagged commit, verify it and publish the GitHub release that
 # mixtile-update on the BMC reads.
 on:
   pull_request:
-    branches: [main]
+    branches: [v120, main]
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -21,15 +22,44 @@ env:
   FORCE_UNSAFE_CONFIGURE: "1"
 
 jobs:
+  # Where to build. The self-hosted runner (label openwrt-n100, a
+  # persistent build tree) only takes runs started by the repository
+  # owner: pushes, tags, manual runs and pull requests from branches of
+  # this repository. Everything else, pull requests from forks included,
+  # builds on a GitHub-hosted runner. Fork pull requests also need an
+  # approval before they run (repository setting).
+  runner:
+    runs-on: ubuntu-latest
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      self-hosted: ${{ steps.pick.outputs.self-hosted }}
+    steps:
+      - id: pick
+        env:
+          TRUSTED: ${{ github.actor == github.repository_owner && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        run: |
+          if [ "${TRUSTED}" = true ]; then
+            echo 'runs-on=["self-hosted","openwrt-n100"]' >> "${GITHUB_OUTPUT}"
+            echo 'self-hosted=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'runs-on="ubuntu-22.04"' >> "${GITHUB_OUTPUT}"
+            echo 'self-hosted=false' >> "${GITHUB_OUTPUT}"
+          fi
+          cat "${GITHUB_OUTPUT}"
+
   firmware:
-    runs-on: ubuntu-22.04
+    needs: runner
+    runs-on: ${{ fromJSON(needs.runner.outputs.runs-on) }}
     timeout-minutes: 360
     permissions:
       contents: write
+    env:
+      SELF_HOSTED: ${{ needs.runner.outputs.self-hosted }}
 
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        if: env.SELF_HOSTED != 'true'
+        uses: easimon/maximize-build-space@v10
         with:
           root-reserve-mb: 4096
           swap-size-mb: 1024
@@ -39,10 +69,28 @@ jobs:
           remove-codeql: true
           remove-docker-images: true
 
+      - name: Own the persistent build tree (self-hosted)
+        # The build runs as root (sudo); hand the tree back to the runner
+        # user so checkout and config steps can update it.
+        if: env.SELF_HOSTED == 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Self-hosted: keep the build tree (toolchain, host tools,
+          # downloads, built packages) from earlier runs.
+          clean: ${{ env.SELF_HOSTED != 'true' }}
+
+      - name: Persistent cache (self-hosted)
+        if: env.SELF_HOSTED == 'true'
+        run: |
+          sudo mkdir -p /cache/ccache
+          sudo chown -R "$(id -u):$(id -g)" /cache
+          # Outputs of earlier runs never reach this run's artifacts.
+          sudo rm -rf release extras files
+          df -h . /cache
 
       - name: Firmware identity
         run: |
@@ -65,13 +113,15 @@ jobs:
           test -s "release-notes/${GITHUB_REF_NAME}.md"
 
       - name: Free extra disk space
+        if: env.SELF_HOSTED != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions
           sudo apt-get clean
           df -h /
 
       - name: Restore download cache
-        uses: actions/cache@v4
+        if: env.SELF_HOSTED != 'true'
+        uses: actions/cache@v6
         with:
           path: dl
           key: ${{ runner.os }}-clusterbox-v120-dl-${{ hashFiles('build.sh', 'feeds.conf.default', 'config/BoardConfig/cluster-box-config', 'package/openmiop/Makefile') }}
@@ -89,6 +139,20 @@ jobs:
 
       - name: Prepare feeds
         run: |
+          # Persistent tree (self-hosted): a feed must sit exactly on its
+          # pinned commit. A clone cut off by a cancelled run looks
+          # present to 'feeds update' but is incomplete; clone it again.
+          if [ "${SELF_HOSTED}" = true ]; then
+            grep -E '^src-git' feeds.conf.default | while read -r _ name spec; do
+              want=${spec##*^}
+              have=$(git -C "feeds/${name}" rev-parse HEAD 2>/dev/null || true)
+              if [ "${have}" != "${want}" ] || ! git -C "feeds/${name}" diff --quiet HEAD 2>/dev/null; then
+                echo "feed ${name}: '${have}' is not ${want}, cloning again"
+                sudo rm -rf "feeds/${name}" "feeds/${name}.index" "feeds/${name}.targetindex" \
+                  "feeds/${name}.tmp" "package/feeds/${name}"
+              fi
+            done
+          fi
           ./build.sh feeds_update
           ./build.sh feeds_install
 
@@ -97,6 +161,10 @@ jobs:
 
       - name: Normalize config
         run: |
+          if [ "${SELF_HOSTED}" = true ]; then
+            echo 'CONFIG_CCACHE=y' >> .config
+            echo 'CONFIG_CCACHE_DIR="/cache/ccache"' >> .config
+          fi
           make defconfig
           for p in openmiop mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun; do
             grep -qx "CONFIG_PACKAGE_${p}=y" .config || { echo "CONFIG_PACKAGE_${p} is not enabled"; exit 1; }
@@ -105,10 +173,19 @@ jobs:
       - name: Download sources
         run: make download -j"$(nproc)"
 
+      - name: Clean target build for a release (self-hosted)
+        # Toolchain and host tools stay; everything that goes into the
+        # image is built again from the tagged sources.
+        if: env.SELF_HOSTED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        run: sudo make clean
+
       - name: Build firmware
+        env:
+          MAKE_VERBOSE: ""
         run: |
           touch first_run
-          sudo --preserve-env=MIXTILE_FW_VERSION,MIXTILE_GIT_COMMIT,MIXTILE_BUILD_DATE,MIXTILE_REPOSITORY \
+          export MAKE_JOBS=$(nproc)
+          sudo --preserve-env=MIXTILE_FW_VERSION,MIXTILE_GIT_COMMIT,MIXTILE_BUILD_DATE,MIXTILE_REPOSITORY,MAKE_JOBS,MAKE_VERBOSE \
             ./build.sh firmware
 
       - name: Collect release artifacts
@@ -117,7 +194,7 @@ jobs:
       - name: Upload firmware artifacts
         # also when verification fails, for inspection; never published then
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clusterbox-firmware-${{ env.MIXTILE_FW_VERSION }}
           if-no-files-found: error
