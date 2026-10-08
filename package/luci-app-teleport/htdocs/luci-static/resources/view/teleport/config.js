@@ -223,7 +223,7 @@ return view.extend({
 		o = s.option(form.DynamicList, 'label', _('Extra labels'));
 
 		s = m.section(form.GridSection, 'app', _('Web applications'),
-			_('HTTP(S) services reachable from the ClusterBox. http://127.0.0.1:80 publishes this UI.'));
+			_('HTTP(S) services reachable from the ClusterBox. URI \'luci\' publishes this UI on the port uhttpd listens on.'));
 		s.anonymous = true;
 		s.addremove = true;
 		s.sortable = true;

@@ -20,9 +20,10 @@ config ssh 'ssh'
 	option enabled '1'
 	list label 'role=bmc'
 
+# uri 'luci' follows the LuCI port from /etc/config/uhttpd
 config app
 	option name 'clusterbox'
-	option uri 'http://127.0.0.1:80'
+	option uri 'luci'
 	option description 'ClusterBox LuCI'
 	option enabled '1'
 
