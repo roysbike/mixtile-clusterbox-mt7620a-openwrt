@@ -1,6 +1,8 @@
 #!/bin/sh
-# Install or update the Teleport agent binary from a GitHub release of the
-# firmware repository (built by .github/workflows/teleport-mipsel.yml).
+# Install or update the Teleport agent binary from the GitHub releases of
+# the firmware repository: each firmware release carries
+# teleport-<version>-linux-mipsel.gz (+ .sha256), built by the firmware
+# workflow; older agents were separate teleport-v<version>-mipsel releases.
 #
 #   install [VERSION|latest]     install (default: installer.version)
 #   install --list               print available versions, newest first
@@ -13,9 +15,18 @@ STATE=/var/run/teleport-install.state
 repo=$(uci -q get teleport.installer.repo)
 repo=${repo:-mixtile-rockchip/mixtile-clusterbox-mt7620a-openwrt}
 
+RELEASES="https://api.github.com/repos/$repo/releases?per_page=50"
+
+# Download URLs of every agent build in the releases.
+agent_urls() {
+	uclient-fetch -q -O - "$RELEASES" |
+		jsonfilter -e '@[*].assets[*].browser_download_url' |
+		grep '/teleport-[0-9][0-9A-Za-z.+-]*-linux-mipsel\.gz$'
+}
+
 list_versions() {
-	uclient-fetch -q -O - "https://api.github.com/repos/$repo/releases?per_page=50" |
-		jsonfilter -e '@[*].tag_name' | sed -n 's/^teleport-v\(.*\)-mipsel$/\1/p'
+	agent_urls | sed 's|.*/teleport-\(.*\)-linux-mipsel\.gz$|\1|' |
+		sort -u -t. -k1,1nr -k2,2nr -k3,3nr
 }
 
 if [ "$1" = --list ]; then
@@ -42,14 +53,15 @@ version=${1:-$(uci -q get teleport.installer.version)}
 if [ -z "$version" ] || [ "$version" = latest ]; then
 	state "running resolving latest version"
 	version=$(list_versions | head -n 1)
-	[ -n "$version" ] || fail "no teleport-v*-mipsel release found in $repo"
+	[ -n "$version" ] || fail "no Teleport agent found in the releases of $repo"
 fi
 version=${version#v}
 case "$version" in
 	*[!0-9A-Za-z.+-]*) fail "invalid version $version" ;;
 esac
 
-url="https://github.com/$repo/releases/download/teleport-v$version-mipsel/teleport-$version-linux-mipsel.gz"
+url=$(agent_urls | grep "/teleport-$version-linux-mipsel\.gz\$" | head -n 1)
+[ -n "$url" ] || fail "no Teleport $version agent in the releases of $repo"
 mkdir -p "$DIR" || fail "cannot create $DIR"
 
 state "running downloading $version"

@@ -504,6 +504,34 @@ static const char *node_busy(int n, char *buf, size_t len)
 
 /* ---------- primitive actions ---------- */
 
+/*
+ * A reset pulse or a power cut drops the node's PCIe link without
+ * warning. If openmiop-rc has a read of that blade's BAR in flight at
+ * that moment, the MT7620A root complex stops answering and only a
+ * Cluster Box reboot brings the fabric back. Ask the helper to let go
+ * of the blade first: it deletes the file once nothing is in flight
+ * and it will leave the blade alone until its link has come back.
+ */
+#define OPENMIOP_RELEASE "/var/run/openmiop-release.02:%02x.0"
+
+static void pcie_release(int n)
+{
+	char path[64];
+	int t;
+
+	snprintf(path, sizeof(path), OPENMIOP_RELEASE, PCI_PORT[n - 1]);
+	if (write_file(path, "1\n"))
+		return;
+	for (t = 0; t < 100; t++) {
+		if (access(path, F_OK))
+			return;
+		msleep(10);
+	}
+	unlink(path);
+	logmsg(LOG_WARNING, "node %d: openmiop-rc did not release the PCIe link "
+	       "(not running?)", n);
+}
+
 static int press(int off, int ms)
 {
 	if (gpio_set(off, 0))
@@ -531,6 +559,8 @@ static int do_poweron(int n, struct opts *o)
 static int do_poweroff(int n, struct opts *o)
 {
 	(void)o;
+	if (node_power(n) == 1)
+		pcie_release(n);
 	if (gpio_set(EN_OFF[n - 1], 0)) {
 		logmsg(LOG_ERR, "node %d: failed to cut power", n);
 		return -1;
@@ -546,6 +576,7 @@ static int do_reset(int n, struct opts *o)
 		logmsg(LOG_WARNING, "node %d: not powered", n);
 		return -1;
 	}
+	pcie_release(n);
 	if (press(RESET_OFF[n - 1], cfg_int("global", "reset_ms", 200))) {
 		logmsg(LOG_ERR, "node %d: reset failed", n);
 		return -1;
