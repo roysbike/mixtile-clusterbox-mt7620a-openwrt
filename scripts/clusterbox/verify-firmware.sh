@@ -2,7 +2,7 @@
 # verify-firmware.sh RELEASE_DIR [EXPECTED_VERSION] [EXPECTED_COMMIT]
 # Unpacks the rootfs of the collected sysupgrade image and checks that the
 # ClusterBox pieces are really inside it: firmware identity, openmiop
-# helper (MIPS, static) and its autostart, kmod-tun for this kernel,
+# helper (MIPS, static) and its autostart, omi-rc and kmod-tun for this kernel,
 # nodectl and its LuCI UI, the update backend and its LuCI page, the
 # LuCI version display, and that the update source is this repository.
 set -euo pipefail
@@ -78,6 +78,13 @@ readelf -A "$r/usr/bin/openmiop-rc" | grep -q 'FP ABI: Soft float' || fail "open
 ls "$r"/etc/rc.d/S*openmiop >/dev/null 2>&1 || fail "openmiop is not enabled at boot"
 grep -q '10.20.0.1/24' "$r/etc/init.d/openmiop" || fail "openmiop init does not set 10.20.0.1/24"
 ok "openmiop-rc ($(file -b "$r/usr/bin/openmiop-rc" | cut -d, -f1-3)), omi-peek, init enabled"
+
+# omi-rc: in the image, not autoloaded (the openmiop init loads it)
+omirc=$r/lib/modules/$KERNEL_VERSION/omi-rc.ko
+[ -s "$omirc" ] || fail "/lib/modules/$KERNEL_VERSION/omi-rc.ko missing"
+! grep -rqs '^omi-rc\|^omi_rc' "$r/etc/modules.d/" || fail "omi-rc must not be autoloaded (openmiop init picks module or helper)"
+grep -q 'omi-rc.ko' "$r/etc/init.d/openmiop" || fail "openmiop init does not load omi-rc"
+ok "omi-rc.ko for $KERNEL_VERSION, loaded by the openmiop init"
 
 tun=$(find "$r/lib/modules/$KERNEL_VERSION" -name tun.ko | head -n1)
 [ -n "$tun" ] || fail "tun.ko missing"

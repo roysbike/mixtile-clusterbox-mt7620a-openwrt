@@ -168,7 +168,7 @@ jobs:
             echo 'CONFIG_CCACHE_DIR="/cache/ccache"' >> .config
           fi
           make defconfig
-          for p in openmiop mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun; do
+          for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun; do
             grep -qx "CONFIG_PACKAGE_${p}=y" .config || { echo "CONFIG_PACKAGE_${p} is not enabled"; exit 1; }
           done
 
