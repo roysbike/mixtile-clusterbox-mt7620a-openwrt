@@ -3,6 +3,35 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.0-rc.5] - 2026-10-11
+
+The BMC never reads a blade: OpenMIOP from pcie-ep-net v0.3.0-rc.1, with
+the Cluster Box side as a kernel module (`omi-rc`, push mode) loaded at
+boot. Blades must run pcie-ep-net v0.3 (mixtile-talos v0.3.0-rc.1)
+first.
+
+### Added
+
+- `kmod-omi-rc` (pcie-ep-net `drivers/omi-rc`), in the image: the
+  Cluster Box side of OpenMIOP in the kernel, in push mode. The blades
+  write their state into BMC memory and the BMC only writes into them,
+  so a blade that crashes or loses power can no longer stop the MT7620A
+  root complex with a read in flight. Provides `omi0` (10.20.0.1, same
+  MAC as the helper). Not autoloaded by itself: the `openmiop` init
+  script loads it.
+
+### Changed
+
+- OpenMIOP from pcie-ep-net v0.3.0-rc.1 (`openmiop` and `kmod-omi-rc`).
+  The `openmiop` init script starts `omi-rc` and falls back to the
+  userspace helper `openmiop-rc` if the module does not load;
+  `touch /etc/openmiop.use-helper` keeps the helper (blades without
+  push mode). The helper itself is unchanged from v0.2.0-rc.2.
+- nodectl 2.0-3: `nodectl reset`/`poweroff` release a blade through
+  `/sys/module/omi_rc/parameters/release` when the module is loaded
+  (the helper's release file otherwise).
+- `verify-firmware.sh` checks `omi-rc.ko` and that the init loads it.
+
 ## [0.1.0-rc.4] - 2026-10-08
 
 A blade that reboots, is reset or loses power through `nodectl` no
@@ -23,15 +52,6 @@ v0.2.0-rc.2 (protocol v4).
   probed only once its link dropped and came back. Log lines carry a
   timestamp; link loss dumps link and AER status of the root and switch
   ports.
-
-### Added
-
-- `kmod-omi-rc` (pcie-ep-net `drivers/omi-rc`, built as a separate
-  package, not loaded automatically yet): the Cluster Box side of
-  OpenMIOP in the kernel, in push mode, so the BMC never reads a blade's
-  BAR. Needs push-mode blades (pcie-ep-net `claude/rc-push`).
-  `nodectl reset`/`poweroff` release blades through its `release`
-  parameter when it is loaded.
 
 ### Changed
 

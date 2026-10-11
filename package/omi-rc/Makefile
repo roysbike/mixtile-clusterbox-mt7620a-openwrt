@@ -4,14 +4,14 @@ include $(INCLUDE_DIR)/kernel.mk
 # Cluster Box side of openmiop as a kernel module (pcie-ep-net
 # drivers/omi-rc): fabric, peer tables and omi0 in push mode, so the
 # BMC never reads a blade's BAR. Replaces the userspace openmiop-rc;
-# not loaded automatically while it is being tested.
+# not autoloaded: the openmiop init loads it (helper as fallback).
 PKG_NAME:=omi-rc
-PKG_VERSION:=0.3.0~dev
+PKG_VERSION:=0.3.0~rc.1
 PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=55a59edeea28e09af1ccb4f60c0f96f96bdaaf8b
+PKG_SOURCE_VERSION:=544f1385b1c8c713d6fdbace3347353af6e65ced
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=4bdb2a07c0be84847a8306f69b1ba3efb80f0cdbc02ba494cc6ae16c287c9b57
+PKG_HASH:=ac0c90d8dc3bc739faaf2ccdf4abf8c910b9813894be7360e6fdb9c176fb5d94
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
