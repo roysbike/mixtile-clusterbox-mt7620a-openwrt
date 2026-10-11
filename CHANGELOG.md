@@ -3,6 +3,24 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.0-rc.6] - 2026-10-12
+
+`omi-rc` from pcie-ep-net v0.3.0-rc.2: the blades are active right after
+the BMC boots, not ~5 minutes later.
+
+### Fixed
+
+- After a BMC boot `omi-rc` (loaded by the init at ~45 s) activated the
+  blades only at ~300 s of uptime: 32-bit jiffies starts 300 s before
+  its wrap and two of the module's deadlines were 0. Blade-to-blade
+  traffic was fine, but the blades' default route, DNS and NTP through
+  the BMC timed out meanwhile. Seen after flashing rc.5 on 2026-10-12.
+
+### Changed
+
+- `openmiop` and `kmod-omi-rc` from pcie-ep-net v0.3.0-rc.2 (`75e0313`);
+  the helper and the init script are unchanged.
+
 ## [0.1.0-rc.5] - 2026-10-11
 
 The BMC never reads a blade: OpenMIOP from pcie-ep-net v0.3.0-rc.1, with
