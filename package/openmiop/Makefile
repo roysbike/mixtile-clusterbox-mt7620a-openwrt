@@ -1,16 +1,16 @@
 include $(TOPDIR)/rules.mk
 
 # Cluster Box side of openmiop (Ethernet over the PCIe fabric), built
-# from a pinned pcie-ep-net commit. The helper is userspace (sysfs PCI
-# config/resource files and a TAP device); no BMC kernel module is
-# needed besides kmod-tun.
+# from a pinned pcie-ep-net commit: the init script, which loads the
+# omi-rc module (kmod-omi-rc) and falls back to the userspace helper
+# (sysfs PCI config/resource files and a TAP device, needs kmod-tun).
 PKG_NAME:=openmiop
-PKG_VERSION:=0.2.0~rc.2
+PKG_VERSION:=0.3.0~rc.1
 PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=ce3b0c92041d3cb8067da521f8039bb33b87e09d
+PKG_SOURCE_VERSION:=544f1385b1c8c713d6fdbace3347353af6e65ced
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=d2a87e374a2dec759b2c81041f48c5c07833df9abfdc6e598c7c5fe1f3dfb867
+PKG_HASH:=ac0c90d8dc3bc739faaf2ccdf4abf8c910b9813894be7360e6fdb9c176fb5d94
 PKG_BUILD_DIR:=$(BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
