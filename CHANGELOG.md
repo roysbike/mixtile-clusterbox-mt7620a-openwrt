@@ -3,6 +3,14 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `kmod-omi-rc` 0.3.0-2 (pcie-ep-net `1ff90cf`): the `omi-rc` control
+  thread no longer keeps the BMC load average at 1.00 (it slept in D
+  state between passes).
+
 ## [0.1.0] - 2026-10-12
 
 First stable ClusterBox firmware: the BMC side of OpenMIOP Stack v0.3.0
