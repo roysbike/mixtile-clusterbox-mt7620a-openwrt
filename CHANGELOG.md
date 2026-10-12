@@ -5,11 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-12
+
+Patch release: the BMC part of OpenMIOP Stack v0.3.1. Only `omi-rc`
+changes; mixtile-talos v0.3.0 stays current on the blades.
+
 ### Fixed
 
-- `kmod-omi-rc` 0.3.0-2 (pcie-ep-net `1ff90cf`): the `omi-rc` control
-  thread no longer keeps the BMC load average at 1.00 (it slept in D
-  state between passes).
+- `kmod-omi-rc` from pcie-ep-net v0.3.1 (`bd2cfba`): the `omi-rc`
+  control thread no longer keeps the BMC load average at 1.00 (it slept
+  in D state between passes).
+
+### Changed
+
+- `openmiop` and `kmod-omi-rc` from pcie-ep-net v0.3.1. The helper is
+  unchanged from 0.3.0.
+
+### Tested
+
+- The v0.3.1 `omi-rc` (same code, built by this firmware's CI) loaded by
+  hand on the lab BMC on v0.1.0-rc.6: `[omi-rc]` in `IW` instead of `DW`,
+  load average 1.08 -> 0.27 within 2 min, all four blades active 1.7 s
+  after `insmod`, `nodectl reset` of a blade: released, active again
+  10.9 s after, node Ready in 57 s.
 
 ## [0.1.0] - 2026-10-12
 
