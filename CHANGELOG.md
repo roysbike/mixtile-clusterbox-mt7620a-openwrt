@@ -3,6 +3,27 @@
 ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.0] - 2026-10-12
+
+First stable ClusterBox firmware: the BMC side of OpenMIOP Stack v0.3.0
+(push mode with `omi-rc`). Same image contents as 0.1.0-rc.6 apart from
+the version.
+
+### Changed
+
+- `openmiop` and `kmod-omi-rc` from pcie-ep-net v0.3.0 (`a4bc7ef`), same
+  code as v0.3.0-rc.2.
+
+### Tested
+
+- rc.6 on the lab Cluster Box (2026-10-12, four Blade 3 on mixtile-talos
+  v0.3.0-rc.1): `omi-rc` loaded by the init at 45.1 s, all blades
+  active at 46.7 s, helper not running; blade DNS through the BMC back
+  the same second; NVMe live on every blade, etcd 3/3, DRBD clean.
+  `nodectl reset` of a blade: released, link down 32 ms later, active
+  again 14.5 s after the reset. iperf3 between blades 25.0 Gbit/s with
+  four senders at once.
+
 ## [0.1.0-rc.6] - 2026-10-12
 
 `omi-rc` from pcie-ep-net v0.3.0-rc.2: the blades are active right after

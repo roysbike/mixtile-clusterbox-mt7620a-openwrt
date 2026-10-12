@@ -6,12 +6,12 @@ include $(INCLUDE_DIR)/kernel.mk
 # BMC never reads a blade's BAR. Replaces the userspace openmiop-rc;
 # not autoloaded: the openmiop init loads it (helper as fallback).
 PKG_NAME:=omi-rc
-PKG_VERSION:=0.3.0~rc.2
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=75e03132362628daffa2498a93482c745e124d2e
+PKG_SOURCE_VERSION:=a4bc7ef7833ed8500787526d20f6bbc16e69016f
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=282b1ff87182dd1a9275c5fe57f889d943d176f8ce31b4f3d920d614a58a6d5d
+PKG_HASH:=25e8511ed94c8da7ddef05fb4243b552f11e0ba4e6d9257a619573c83a2b5530
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
