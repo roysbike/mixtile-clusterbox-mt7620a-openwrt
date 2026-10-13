@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0-rc.2] - 2026-10-13
+
+The BMC part of OpenMIOP Stack v0.4.0-rc.2.
+
+### Fixed
+
+- `kmod-omi-rc` and `openmiop` from pcie-ep-net v0.4.0-rc.2 (`11c8e53`).
+  When `omi-rc` resyncs a blade's gateway ring it now writes the new
+  credit to the blade at once (a blade on v0.4.0-rc.1 could wait for it
+  forever with a full ring and lose the gateway), logs a warning and
+  counts `rx_fifo_errors` on omi0. The main fix of that bug, false peer
+  stalls under load, is on the blades: mixtile-talos v0.4.0-rc.2.
+- CI image check: `omi-rc` is v0.4.0-rc.2 or later.
+
+### Tested
+
+On the lab Cluster Box (firmware v0.2.0-rc.1 with this `omi-rc` code
+loaded by hand), .108 on the v0.4.0-rc.2 blade driver: 21 stress rounds
+(3 parallel 300 MB blade -> LAN uploads plus a 300 MB download, BMC CPU
+99 %), the last 15 during P2P load at 8.7 Gbit/s: gateway up throughout,
+0 stalls, `rx_fifo_errors` 0.
+
 ## [0.2.0-rc.1] - 2026-10-13
 
 The BMC part of OpenMIOP Stack v0.4.0-rc.1: a faster gateway from the

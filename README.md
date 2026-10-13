@@ -11,9 +11,10 @@ and a GitHub-Releases update mechanism.
 
 Current release: **v0.1.1** — see [CHANGELOG.md](CHANGELOG.md) and the
 [release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1).
-Release candidate: **v0.2.0-rc.1** (OpenMIOP Stack v0.4.0-rc.1: gateway
-pull, ~1.5x faster LAN -> blades; flow offloading on by default), see
-[release notes](release-notes/v0.2.0-rc.1.md).
+Release candidate: **v0.2.0-rc.2** (OpenMIOP Stack v0.4.0-rc.2: gateway
+pull, ~1.5x faster LAN -> blades; flow offloading on by default; rc.2:
+gateway fix under load), see
+[release notes](release-notes/v0.2.0-rc.2.md).
 
 ## Hardware and who this is for
 

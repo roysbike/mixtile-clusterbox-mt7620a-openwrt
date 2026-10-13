@@ -11,9 +11,10 @@ OpenWrt 23.05 (ядро 5.15.150) на MediaTek MT7620A. В ней управл�
 
 Текущий релиз: **v0.1.1** — см. [CHANGELOG.md](CHANGELOG.md) и
 [страницу релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1).
-Релиз-кандидат: **v0.2.0-rc.1** (OpenMIOP Stack v0.4.0-rc.1: gateway pull —
+Релиз-кандидат: **v0.2.0-rc.2** (OpenMIOP Stack v0.4.0-rc.2: gateway pull —
 трафик из LAN к блейдам примерно в 1,5 раза быстрее; flow offloading
-включён по умолчанию), см. [release notes](release-notes/v0.2.0-rc.1.md).
+включён по умолчанию; в rc.2 — исправление шлюза под нагрузкой), см.
+[release notes](release-notes/v0.2.0-rc.2.md).
 
 ## Оборудование и для кого это
 
