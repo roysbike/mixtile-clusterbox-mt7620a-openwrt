@@ -1,18 +1,49 @@
 # Mixtile ClusterBox BMC firmware (OpenWrt, MT7620A)
 
+[English](README.md) · [Русский](README.ru.md)
+
 Firmware for the management controller (BMC) of the **Mixtile Cluster Box**:
 OpenWrt 23.05 (kernel 5.15.150) on the MediaTek MT7620A, with node control
-for the four Blade 3 slots (`nodectl` + LuCI), the **OpenMIOP** root-complex
-helper for blade-to-blade Ethernet over the internal PCIe fabric, a firmware
-identity file and a GitHub-Releases update mechanism.
+for the four Blade 3 slots (`nodectl` + LuCI), the BMC side of **OpenMIOP**
+(blade-to-blade Ethernet over the internal PCIe fabric: the `omi-rc` kernel
+module, with the `openmiop-rc` helper as fallback), a firmware identity file
+and a GitHub-Releases update mechanism.
 
 Current release: **v0.1.1** — see [CHANGELOG.md](CHANGELOG.md) and the
 [release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1).
 
+## Hardware and who this is for
+
+The **Mixtile Cluster Box** is a small chassis for four **Mixtile Blade 3**
+boards. Inside it:
+
+* a management controller (BMC): MediaTek MT7620A (MIPS) with OpenWrt. It
+  switches the blades on and off, resets them, gives access to their
+  serial consoles and is the PCIe root complex of the box;
+* an ASMedia ASM2824 PCIe Gen3 switch: a Gen3 x2 link to each blade slot
+  and a Gen1 x1 uplink to the BMC.
+
+The **Mixtile Blade 3** is a compute board with the Rockchip RK3588
+(4× Cortex-A76 + 4× Cortex-A55), eMMC and an M.2 NVMe slot. Its PCIe 3.0
+x4 controller is split in two: lanes 0-1 go to the Cluster Box switch,
+lanes 2-3 to the NVMe. A Blade 3 also works on its own, without a
+Cluster Box.
+
+Mixtile ships the box with its own BMC firmware and its own blade
+network driver (MIOP). The **OpenMIOP Stack** is an independent open
+replacement for people who own a Cluster Box with Blade 3 boards (or a
+single Blade 3) and want:
+
+| You want | Repository |
+| --- | --- |
+| Ethernet between the blades over the PCIe switch (`omi0`, ~5 Gbit/s per flow, ~25 Gbit/s with four senders) | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) |
+| Talos Linux (Kubernetes) on Blade 3, in a Cluster Box or on its own | [mixtile-talos](https://github.com/roysbike/mixtile-talos) |
+| Current OpenWrt on the BMC: blade power and consoles, firmware updates, the BMC side of OpenMIOP | [mixtile-clusterbox-mt7620a-openwrt](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt) (this repository) |
+
 ## OpenMIOP stack
 
 ```
-ClusterBox BMC/OpenWrt  (this firmware: openmiop-rc, omi0 10.20.0.1)
+ClusterBox BMC/OpenWrt  (this firmware: omi-rc, omi0 10.20.0.1)
         |
      ASM2824 PCIe switch  (uplink Gen1 x1: control + slow gateway)
         |
@@ -160,7 +191,10 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
   This needs the card's existing partition table (as shipped by Mixtile).
   A blank card needs Mixtile's factory SD image first.
 * Blades keep power while the BMC is down or rebooting; their OS keeps
-  running. The OpenMIOP fabric pauses until `openmiop-rc` runs again.
+  running. Every blade link resets; blades on pcie-ep-net v0.3 reconnect
+  to each other after ~12 s by themselves, and the BMC (`omi0`
+  10.20.0.1, the blades' gateway) is back when `omi-rc` loads (~45 s
+  after power-on).
 * Tested on hardware: v0.1.0-rc.1 installed on the lab BMC (through LuCI
   *Flash Firmware*) boots, `/etc/mixtile-release` and the LuCI login page
   show the build, the OpenMIOP fabric runs with four blades; check,
@@ -172,11 +206,16 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
 
 ```sh
 cat /etc/mixtile-release
-pgrep -l openmiop-rc; tail /tmp/openmiop-rc.log   # "node N active" per blade
+lsmod | grep omi_rc; dmesg | grep omi0            # "push mode", "node N active" per blade
+cat /proc/loadavg                                 # ~0 on an idle BMC (v0.1.1)
 lspci -d 1d87:4f4d -vv | grep -E 'LnkSta|Region 0'
 ip addr show omi0                                 # 10.20.0.1/24, mtu 9000
 ping -c3 10.20.0.<blade>
+nodectl status --all                              # every blade powered, LINK Gen3 x2
 ```
+
+If `omi-rc` cannot load, `/etc/init.d/openmiop` starts the helper
+instead: `pgrep -l openmiop-rc; tail /tmp/openmiop-rc.log`.
 
 ## Build
 
@@ -194,12 +233,15 @@ MIXTILE_FW_VERSION=$(git describe --tags --always) ./build.sh firmware
 
 Feeds are pinned to commits in `feeds.conf.default`.
 
-## Known limitations (v0.1.0-rc.2)
+## Known limitations (v0.1.1)
 
-* OpenMIOP: RX on the blades is polled, no multiqueue, BMC gateway is
-  management-grade (~12 Mbit/s); root-port re-enumeration pauses fabric
-  traffic ~1-2 s; a blade that disappears without the leave handshake can
-  race a BMC read and wedge the fabric until the BMC reboots.
+* OpenMIOP: the BMC gateway is management-grade (~12 Mbit/s); a BMC
+  reboot resets every blade link (on Blade 3 also the M.2 NVMe, which
+  mixtile-talos v0.3.0 recovers); with the fallback helper, root-port
+  re-enumeration pauses fabric traffic ~1-2 s and a blade that
+  disappears without the leave handshake can race a BMC read and wedge
+  the fabric (`omi-rc` never reads a blade). Full list:
+  [pcie-ep-net](https://github.com/roysbike/pcie-ep-net#known-limitations).
 * Updates: install path and microSD recovery not hardware-tested; releases
   not signed; no A/B rootfs (a failed write needs the microSD recovery).
 
