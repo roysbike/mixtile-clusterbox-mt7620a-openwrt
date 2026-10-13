@@ -1,0 +1,28 @@
+Cluster Box: the WAN side of the BMC is the management LAN; accept
+input and forwarding there and allow SSH.
+
+--- a/root/etc/config/firewall
++++ b/root/etc/config/firewall
+@@ -17,9 +17,9 @@
+ 	option name		wan
+ 	list   network		'wan'
+ 	list   network		'wan6'
+-	option input		REJECT
++	option input		ACCEPT
+ 	option output		ACCEPT
+-	option forward		DROP
++	option forward		ACCEPT
+ 	option masq		1
+ 	option mtu_fix		1
+ 
+@@ -187,3 +187,10 @@
+ #	option dest_ip	194.25.2.129
+ #	option dest_port	120
+ #	option proto	tcp
++
++config rule
++	option name		Allow-SSH
++	option target		ACCEPT
++	option src		wan
++	option dest_port	22
++	option proto		tcp

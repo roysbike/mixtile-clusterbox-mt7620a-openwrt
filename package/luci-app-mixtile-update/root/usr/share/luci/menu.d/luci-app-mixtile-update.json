@@ -1,0 +1,13 @@
+{
+	"admin/system/mixtile-update": {
+		"title": "Firmware Update",
+		"order": 71,
+		"action": {
+			"type": "view",
+			"path": "mixtile/update"
+		},
+		"depends": {
+			"acl": [ "luci-app-mixtile-update" ]
+		}
+	}
+}

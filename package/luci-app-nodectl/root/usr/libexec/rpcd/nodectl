@@ -1,0 +1,262 @@
+#!/bin/sh
+# rpcd backend for luci-app-nodectl.
+
+. /usr/share/libubox/jshn.sh
+
+NODECTL=/bin/nodectl
+TOKEN_DIR=/var/run/nodectl/tokens
+TOKEN_TTL=60
+SSH_KEY=/root/.ssh/id_dropbear
+
+reply() {
+	json_init
+	json_add_int code "$1"
+	json_add_string output "$2"
+	json_dump
+}
+
+run() {
+	local out rc
+	out=$("$NODECTL" "$@" 2>&1)
+	rc=$?
+	reply "$rc" "$out"
+}
+
+node_args() {
+	case "$1" in
+		0) echo "--all" ;;
+		1|2|3|4) echo "-n $1" ;;
+		*) return 1 ;;
+	esac
+}
+
+new_token() {
+	local tok now f exp
+
+	mkdir -p "$TOKEN_DIR" && chmod 700 "$TOKEN_DIR"
+	now=$(date +%s)
+	for f in "$TOKEN_DIR"/*; do
+		[ -f "$f" ] || continue
+		read -r _ _ exp < "$f"
+		[ "${exp:-0}" -lt "$now" ] && rm -f "$f"
+	done
+	tok=$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom)
+	echo "$1 $2 $((now + TOKEN_TTL))" > "$TOKEN_DIR/$tok"
+	echo "$tok"
+}
+
+case "$1" in
+list)
+	cat <<-'EOF'
+	{
+		"status": {},
+		"action": { "node": 1, "action": "poweron", "force": false, "hard": false },
+		"rescan": {},
+		"console": { "node": 1, "mode": "serial" },
+		"flash": { "node": 1, "source": "", "target": "", "reboot": true },
+		"log": { "node": 1 },
+		"console_log": { "node": 1, "bytes": 16384 },
+		"send": { "node": 1, "text": "" },
+		"fan": { "duty": 85 },
+		"leases": {},
+		"pubkey": {},
+		"pxe": {},
+		"pxe_delete": { "name": "" },
+		"pxe_enable": { "enable": true, "bootfile": "" }
+	}
+	EOF
+	;;
+call)
+	read -r input
+	[ -n "$input" ] || input='{}'
+	json_load "$input"
+
+	case "$2" in
+	status)
+		out=$("$NODECTL" status --json 2>/dev/null || echo '{"nodes":[]}')
+		json_load "$out"
+		json_add_object host
+		json_add_int uptime "$(cut -d. -f1 /proc/uptime)"
+		json_add_string loadavg "$(cut -d' ' -f1-3 /proc/loadavg)"
+		mem_total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+		mem_avail=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+		json_add_int mem_total_kb "${mem_total:-0}"
+		json_add_int mem_avail_kb "${mem_avail:-0}"
+		if [ -r /sys/class/thermal/thermal_zone0/temp ]; then
+			json_add_int temp_mc "$(cat /sys/class/thermal/thermal_zone0/temp)"
+		fi
+		metrics=$(uclient-fetch -q -T 1 -O - http://127.0.0.1:9100/metrics 2>/dev/null)
+		if [ -n "$metrics" ]; then
+			json_add_boolean exporter 1
+			l1=$(echo "$metrics" | awk '$1=="node_load1"{print $2; exit}')
+			l5=$(echo "$metrics" | awk '$1=="node_load5"{print $2; exit}')
+			l15=$(echo "$metrics" | awk '$1=="node_load15"{print $2; exit}')
+			[ -n "$l1" ] && json_add_string loadavg "$l1 $l5 $l15"
+			mt=$(echo "$metrics" | awk '$1=="node_memory_MemTotal_bytes"{printf "%d", $2/1024; exit}')
+			ma=$(echo "$metrics" | awk '$1=="node_memory_MemAvailable_bytes"{printf "%d", $2/1024; exit}')
+			[ -n "$mt" ] && json_add_int mem_total_kb "$mt"
+			[ -n "$ma" ] && json_add_int mem_avail_kb "$ma"
+			tz=$(echo "$metrics" | awk '$1 ~ /^node_thermal_zone_temp/{printf "%d", $2*1000; exit}')
+			[ -n "$tz" ] && json_add_int temp_mc "$tz"
+		else
+			json_add_boolean exporter 0
+		fi
+		json_close_object
+		json_dump
+		;;
+	action)
+		json_get_vars node action force hard
+		sel=$(node_args "$node") || { reply 2 "invalid node"; exit 0; }
+		case "$action" in
+			poweron|poweroff|reset)
+				run "$action" $sel ;;
+			shutdown|reboot)
+				set -- "$action" $sel --bg
+				[ "$force" = 1 ] && set -- "$@" --force
+				[ "$hard" = 1 ] && set -- "$@" --hard
+				run "$@" ;;
+			*)
+				reply 2 "invalid action" ;;
+		esac
+		;;
+	rescan)
+		run rescan
+		;;
+	console)
+		json_get_vars node mode
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$mode" in serial|ssh) ;; *) reply 2 "invalid mode"; exit 0 ;; esac
+		json_init
+		json_add_string token "$(new_token "$mode" "$node")"
+		json_add_int port "$(uci -q get ttyd.nodectl.port || echo 7682)"
+		json_dump
+		;;
+	flash)
+		json_get_vars node source target reboot
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$source" in
+			/*|http://*|https://*) ;;
+			*) reply 2 "source must be an absolute path or an http(s) URL"; exit 0 ;;
+		esac
+		if [ -n "$target" ]; then
+			case "$target" in
+				/dev/*) ;;
+				*) reply 2 "target must be a /dev path"; exit 0 ;;
+			esac
+			case "$target" in
+				*[!A-Za-z0-9/_.-]*) reply 2 "invalid characters in target"; exit 0 ;;
+			esac
+		fi
+		set -- flash -n "$node" -f "$source" -y --bg
+		[ -n "$target" ] && set -- "$@" --target "$target"
+		[ "$reboot" = 0 ] && set -- "$@" --no-reboot
+		run "$@"
+		;;
+	log)
+		json_get_vars node
+		case "$node" in 1|2|3|4) f=/var/log/nodectl/node$node.log ;; *) f=/var/log/nodectl/all.log ;; esac
+		json_init
+		json_add_string log "$(tail -c 8192 "$f" 2>/dev/null)"
+		json_dump
+		;;
+	console_log)
+		json_get_vars node bytes
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		case "$bytes" in ''|*[!0-9]*) bytes=16384 ;; esac
+		[ "$bytes" -gt 262144 ] && bytes=262144
+		f=/var/log/nodectl/console$node.log
+		json_init
+		json_add_string log "$( { [ -f "$f.1" ] && tail -c "$bytes" "$f.1"; tail -c "$bytes" "$f"; } 2>/dev/null |
+			tail -c "$bytes" | tr -d '\000-\010\013\014\016-\032\034-\037')"
+		json_dump
+		;;
+	send)
+		json_get_vars node text
+		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
+		run send -n "$node" -- "$text"
+		;;
+	fan)
+		json_get_vars duty
+		case "$duty" in ''|*[!0-9]*) reply 2 "duty must be 0-100"; exit 0 ;; esac
+		[ "$duty" -le 100 ] || { reply 2 "duty must be 0-100"; exit 0; }
+		uci -q set nodectl.global.fan_duty="$duty" && uci -q commit nodectl
+		run fan "$duty"
+		;;
+	leases)
+		json_init
+		json_add_array leases
+		[ -f /tmp/dhcp.leases ] && while read -r _ mac ip name _; do
+			json_add_object
+			json_add_string mac "$mac"
+			json_add_string ipaddr "$ip"
+			json_add_string hostname "$name"
+			json_close_object
+		done < /tmp/dhcp.leases
+		json_close_array
+		json_dump
+		;;
+	pubkey)
+		if [ ! -f "$SSH_KEY" ]; then
+			mkdir -p /root/.ssh && chmod 700 /root/.ssh
+			dropbearkey -t ed25519 -f "$SSH_KEY" >/dev/null 2>&1 ||
+				dropbearkey -t rsa -s 2048 -f "$SSH_KEY" >/dev/null 2>&1
+		fi
+		json_init
+		json_add_string pubkey "$(dropbearkey -y -f "$SSH_KEY" 2>/dev/null | grep -E '^(ssh-|ecdsa-)')"
+		json_dump
+		;;
+	pxe)
+		mkdir -p /opt/pxe
+		json_init
+		json_add_string root /opt/pxe
+		json_add_string http "http://$(uci -q get network.lan.ipaddr || echo 169.192.1.1)/pxe/"
+		json_add_boolean tftp "$(uci -q get dhcp.@dnsmasq[0].enable_tftp)"
+		json_add_string tftp_root "$(uci -q get dhcp.@dnsmasq[0].tftp_root)"
+		json_add_string bootfile "$(uci -q get dhcp.@dnsmasq[0].dhcp_boot)"
+		json_add_array files
+		for f in /opt/pxe/*; do
+			[ -f "$f" ] || continue
+			json_add_object
+			json_add_string name "${f##*/}"
+			json_add_int size "$(wc -c < "$f")"
+			json_close_object
+		done
+		json_close_array
+		json_dump
+		;;
+	pxe_delete)
+		json_get_vars name
+		case "$name" in
+			''|*/*|.*) reply 2 "invalid name"; exit 0 ;;
+			*[!A-Za-z0-9._+-]*) reply 2 "invalid name"; exit 0 ;;
+		esac
+		rm -f "/opt/pxe/$name"
+		reply 0 "deleted"
+		;;
+	pxe_enable)
+		json_get_vars enable bootfile
+		mkdir -p /opt/pxe /www
+		[ -L /www/pxe ] || [ -d /www/pxe ] || ln -s /opt/pxe /www/pxe
+		if [ "$enable" = 0 ]; then
+			uci -q delete dhcp.@dnsmasq[0].enable_tftp
+			uci -q delete dhcp.@dnsmasq[0].tftp_root
+			uci -q delete dhcp.@dnsmasq[0].dhcp_boot
+		else
+			if [ -n "$bootfile" ]; then
+				case "$bootfile" in
+					*/*|.*) reply 2 "invalid bootfile"; exit 0 ;;
+					*[!A-Za-z0-9._+-]*) reply 2 "invalid bootfile"; exit 0 ;;
+				esac
+				[ -f "/opt/pxe/$bootfile" ] || { reply 2 "bootfile not in /opt/pxe"; exit 0; }
+			fi
+			uci -q set dhcp.@dnsmasq[0].enable_tftp=1
+			uci -q set dhcp.@dnsmasq[0].tftp_root=/opt/pxe
+			[ -n "$bootfile" ] && uci -q set dhcp.@dnsmasq[0].dhcp_boot="$bootfile"
+		fi
+		uci -q commit dhcp
+		/etc/init.d/dnsmasq reload
+		reply 0 "ok"
+		;;
+	esac
+	;;
+esac

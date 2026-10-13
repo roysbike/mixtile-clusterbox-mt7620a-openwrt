@@ -1,0 +1,9 @@
+# Overlay paths that "mixtile-update install" keeps in addition to the
+# configuration listed by "sysupgrade -l". One absolute path per line;
+# a trailing / keeps a whole directory. Everything else in the overlay
+# is removed before the update so the new firmware's files take effect.
+/etc/mixtile-update/
+/etc/rc.d/
+/root/.ssh/
+/home/
+/opt/

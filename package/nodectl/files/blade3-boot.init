@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+
+START=15
+STOP=20
+
+start() {
+	local delay
+
+	/bin/nodectl boot
+
+	delay=$(uci -q get nodectl.global.rescan_delay)
+	[ "${delay:-0}" -gt 0 ] && ( sleep "$delay"; /bin/nodectl rescan ) >/dev/null 2>&1 &
+}
+
+stop() {
+	case "$(uci -q get nodectl.global.stop_action)" in
+		shutdown) /bin/nodectl shutdown --all ;;
+		poweroff) /bin/nodectl poweroff --all ;;
+	esac
+}

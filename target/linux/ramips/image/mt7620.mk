@@ -603,6 +603,21 @@ define Device/hiwifi_hc5861
 endef
 TARGET_DEVICES += hiwifi_hc5861
 
+define Device/cluster-box-control-V120
+  SOC := mt7620a
+  DEVICE_VENDOR := Mixtile
+  DEVICE_MODEL := CLUSTER BOX CONTROL
+  DEVICE_PACKAGES := kmod-usb2 kmod-usb-ohci kmod-phy-realtek kmod-usb-ledtrig-usbport
+  SUPPORTED_DEVICES := cluster-box-control-V120
+  # The BMC boots from the SD card: the kernel at mmcblk0p1 (10 MiB from
+  # sector 16), the squashfs at mmcblk0p2 (50 MiB) right after it, the
+  # overlay on mmcblk0p3. platform.sh writes this image at sector 16.
+  IMAGES := sysupgrade-sd.bin
+  IMAGE/sysupgrade-sd.bin := append-kernel | check-size 10240k | pad-to 10240k | \
+	append-rootfs | check-size 61440k | append-metadata
+endef
+TARGET_DEVICES += cluster-box-control-V120
+
 define Device/hnet_c108
   SOC := mt7620a
   IMAGE_SIZE := 16064k

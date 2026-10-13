@@ -1,0 +1,31 @@
+{
+	"luci-app-mixtile-update": {
+		"description": "Grant access to ClusterBox firmware updates",
+		"read": {
+			"file": {
+				"/etc/mixtile-release": [ "read" ],
+				"/usr/libexec/mixtile-update status": [ "exec" ]
+			},
+			"uci": [ "mixtile-update" ]
+		},
+		"write": {
+			"file": {
+				"/usr/libexec/mixtile-update check": [ "exec" ],
+				"/usr/libexec/mixtile-update check *": [ "exec" ],
+				"/usr/libexec/mixtile-update download --background": [ "exec" ],
+				"/usr/libexec/mixtile-update verify": [ "exec" ],
+				"/usr/libexec/mixtile-update verify *": [ "exec" ],
+				"/usr/libexec/mixtile-update install *": [ "exec" ]
+			},
+			"uci": [ "mixtile-update" ]
+		}
+	},
+	"luci-mod-status-mixtile-release": {
+		"description": "Show the ClusterBox firmware identity on the overview page",
+		"read": {
+			"file": {
+				"/etc/mixtile-release": [ "read" ]
+			}
+		}
+	}
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# ttyd entry point for node consoles. Only runs with a one-time token issued
+# by the rpcd "nodectl console" method to an authenticated LuCI session.
+
+TOKEN_DIR=/var/run/nodectl/tokens
+
+deny() {
+	echo "$1 Reopen the console from LuCI (Cluster -> Nodes)."
+	sleep 3
+	exit 1
+}
+
+tok="${1:-}"
+case "$tok" in
+	""|*[!0-9a-f]*) deny "Invalid console session." ;;
+esac
+
+f="$TOKEN_DIR/$tok"
+[ -f "$f" ] || deny "Console session expired."
+read -r mode node expires < "$f"
+rm -f "$f"
+[ "$(date +%s)" -le "${expires:-0}" ] || deny "Console session expired."
+
+case "$node" in 1|2|3|4) ;; *) deny "Invalid node." ;; esac
+
+case "$mode" in
+	serial)
+		echo "Serial console of node $node. Exit: Ctrl-A Ctrl-X."
+		exec /bin/nodectl console -n "$node"
+		;;
+	ssh)
+		exec /bin/nodectl ssh -n "$node"
+		;;
+esac
+deny "Invalid console mode."

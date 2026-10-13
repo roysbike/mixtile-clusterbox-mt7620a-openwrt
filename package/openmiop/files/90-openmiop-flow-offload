@@ -1,0 +1,9 @@
+#!/bin/sh
+# The BMC routes and NATs all traffic between the blades (omi0) and the
+# LAN. Software flow offloading takes ~10 points of BMC CPU off that and
+# speeds up blade -> LAN by ~20 %. Only when the option is not set yet,
+# so an explicit choice survives updates.
+uci -q get firewall.@defaults[0].flow_offloading >/dev/null && exit 0
+uci -q set firewall.@defaults[0].flow_offloading=1
+uci -q commit firewall
+exit 0

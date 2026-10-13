@@ -23,6 +23,8 @@ PKG_LICENSE_FILES:=
 PKG_BUILD_FLAGS:=no-mips16
 PKG_FLAGS:=nonshared
 
+# check_extroot() is unused with patches/001-cancel-check_extroot.patch.
+EXTRA_CFLAGS += -Wno-unused-function
 PKG_BUILD_DEPENDS := util-linux
 PKG_CONFIG_DEPENDS := CONFIG_NAND_SUPPORT CONFIG_FSTOOLS_UBIFS_EXTROOT
 

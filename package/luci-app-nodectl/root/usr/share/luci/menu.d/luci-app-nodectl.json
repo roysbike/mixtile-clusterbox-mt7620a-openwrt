@@ -1,0 +1,51 @@
+{
+	"admin/cluster": {
+		"title": "Cluster",
+		"order": 35,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-nodectl" ]
+		}
+	},
+
+	"admin/cluster/nodes": {
+		"title": "Nodes",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "nodectl/nodes"
+		}
+	},
+
+	"admin/cluster/flash": {
+		"title": "Flash",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "nodectl/flash"
+		}
+	},
+
+	"admin/cluster/rescue": {
+		"title": "Rescue / PXE",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "nodectl/rescue"
+		}
+	},
+
+	"admin/cluster/settings": {
+		"title": "Settings",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "nodectl/settings"
+		},
+		"depends": {
+			"uci": { "nodectl": true }
+		}
+	}
+}

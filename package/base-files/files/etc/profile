@@ -21,8 +21,31 @@ export PATH="%PATH%"
 HOME=$(grep -E "^${USER:-root}:" /etc/passwd | cut -d ":" -f 6)
 HOME=${HOME:-/root}
 export HOME
-export PS1='\u@\h:\w\$ '
+export PS1='\[\e[36;1m\]\u@\[\e[36;1m\]\h\[\e[32;1m\]:\[\e[34;1m\]\w\[\e[m\]\$ '
 export ENV=/etc/shinit
+alias nodectl='sudo nodectl'
+alias reboot='sudo reboot'
+
+_nodectl()
+{
+    COMPREPLY=()
+    local cur=${COMP_WORDS[COMP_CWORD]};
+    local cmd=${COMP_WORDS[COMP_CWORD-1]};
+    if [[ "$cmd" == *nodectl ]];then
+        COMPREPLY=( $(compgen -W 'status list poweron poweroff shutdown reboot reset flash console ssh rescan' -- $cur) )
+	else
+		case $cmd in
+			'status'|'poweron'|'poweroff'|'shutdown'|'reboot')
+				COMPREPLY=( $(compgen -W '--all -n' -- $cur) ) ;;
+			'reset'|'flash'|'console'|'ssh')
+				COMPREPLY=( $(compgen -W '-n' -- $cur) ) ;;
+			'-f')
+				COMPREPLY=( $( compgen -A file )) ;;
+		esac
+	fi
+    return 0
+}
+complete -F _nodectl nodectl
 
 case "$TERM" in
 	xterm*|rxvt*)

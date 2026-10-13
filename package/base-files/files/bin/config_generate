@@ -2,6 +2,7 @@
 
 CFG=/etc/board.json
 
+. /lib/functions/system.sh
 . /usr/share/libubox/jshn.sh
 . /lib/functions/ipv4.sh
 
@@ -38,6 +39,7 @@ generate_bridge_vlan() {
 }
 
 generate_static_network() {
+	eth_pci_mac=$(macaddr_add "$(mtd_get_mac_binary factory 0x10)" 2)
 	uci -q batch <<-EOF
 		delete network.loopback
 		set network.loopback='interface'
@@ -47,6 +49,19 @@ generate_static_network() {
 		delete network.globals
 		set network.globals='globals'
 		set network.globals.dhcp_default_duid='auto'
+
+		delete network.eth_pci
+		set network.eth_pci='interface'
+		set network.eth_pci.device='pci0'
+		set network.eth_pci.proto='static'
+		set network.eth_pci.ipaddr='10.20.0.1'
+		set network.eth_pci.netmask='255.255.255.0'
+		set network.eth_pci.broadcast='10.20.0.255'
+		set network.eth_pci.ip6assign='64'
+
+		add network device
+		set network.@device[-1].name='pci0'
+		set network.@device[-1].macaddr='$eth_pci_mac'
 	EOF
 	[ -e /proc/sys/net/ipv6 ] && {
 		uci -q batch <<-EOF
@@ -163,8 +178,8 @@ generate_network() {
 		static)
 			local ipad netm prefix
 			case "$1" in
-				lan) ipad=${ipaddr:-"192.168.1.1"} ;;
-				*) ipad=${ipaddr:-"192.168.$((addr_offset++)).1"} ;;
+				lan) ipad=${ipaddr:-"169.192.1.1"} ;;
+				*) ipad=${ipaddr:-"169.192.$((addr_offset++)).1"} ;;
 			esac
 
 			netm=${netmask:-"255.255.255.0"}
@@ -313,7 +328,7 @@ generate_static_system() {
 	uci -q batch <<-EOF
 		delete system.@system[0]
 		add system system
-		set system.@system[-1].hostname='OpenWrt'
+		set system.@system[-1].hostname='ClusterBox'
 		set system.@system[-1].timezone='GMT0'
 		set system.@system[-1].zonename='UTC'
 		set system.@system[-1].ttylogin='0'

@@ -1,0 +1,98 @@
+# Mixtile Cluster Box BMC (MT7620A) on OpenWrt 25.12.
+# Seed configuration: ./build.sh cluster-box-config links it to .config,
+# `make defconfig` expands it. Only what differs from the defaults.
+
+# Target
+CONFIG_TARGET_ramips=y
+CONFIG_TARGET_ramips_mt7620=y
+CONFIG_TARGET_ramips_mt7620_DEVICE_cluster-box-control-V120=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+# CONFIG_TARGET_ROOTFS_INITRAMFS is not set
+
+# Kernel features used on the BMC
+CONFIG_KERNEL_SWAP=y
+CONFIG_KERNEL_DEBUG_FS=y
+CONFIG_KERNEL_KALLSYMS=y
+CONFIG_KERNEL_MAGIC_SYSRQ=y
+CONFIG_KERNEL_PRINTK_TIME=y
+CONFIG_KERNEL_DEVMEM=y
+
+# OpenMIOP, Cluster Box tools, firmware updates
+CONFIG_PACKAGE_kmod-omi-rc=y
+CONFIG_PACKAGE_openmiop=y
+CONFIG_PACKAGE_kmod-tun=y
+CONFIG_PACKAGE_nodectl=y
+CONFIG_PACKAGE_luci-app-nodectl=y
+CONFIG_PACKAGE_mixtile-release=y
+CONFIG_PACKAGE_mixtile-update=y
+CONFIG_PACKAGE_luci-app-mixtile-update=y
+CONFIG_PACKAGE_custom-files=y
+CONFIG_PACKAGE_kmod-ch343=y
+
+# Board hardware
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb-ohci=y
+CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_kmod-phy-realtek=y
+CONFIG_PACKAGE_kmod-leds-gpio=y
+CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+CONFIG_PACKAGE_kmod-gpio-pca953x=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-nls-cp437=y
+CONFIG_PACKAGE_kmod-nls-iso8859-1=y
+CONFIG_PACKAGE_kmod-nls-utf8=y
+
+# Gateway for the blades: NAT, flow offloading
+CONFIG_PACKAGE_kmod-nft-offload=y
+
+# SD card: overlay on ext4 (mmcblk0p3)
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_e2fsprogs=y
+CONFIG_PACKAGE_resize2fs=y
+
+# Web UI
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-acl=y
+CONFIG_PACKAGE_luci-app-ttyd=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-theme-openwrt-2020=y
+
+# Tools used by nodectl, mixtile-update and on the console
+CONFIG_PACKAGE_sudo=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_picocom=y
+CONFIG_PACKAGE_sshpass=y
+CONFIG_PACKAGE_ttyd=y
+CONFIG_PACKAGE_pciutils=y
+CONFIG_PACKAGE_pciids=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_ip-bridge=y
+CONFIG_PACKAGE_xz-utils=y
+CONFIG_PACKAGE_zstd=y
+CONFIG_PACKAGE_uclient-fetch=y
+CONFIG_PACKAGE_ca-bundle=y
+CONFIG_PACKAGE_prometheus-node-exporter-lua=y
+CONFIG_PACKAGE_prometheus-node-exporter-lua-netstat=y
+CONFIG_PACKAGE_prometheus-node-exporter-lua-openwrt=y
+CONFIG_PACKAGE_prometheus-node-exporter-lua-textfile=y
+
+# Not used on the Cluster Box BMC (no Wi-Fi radio, WAN by DHCP, no VPN
+# or dynamic DNS configured): left out of the image.
+# CONFIG_PACKAGE_wpad-basic-mbedtls is not set
+# CONFIG_PACKAGE_wpad-basic-wolfssl is not set
+# CONFIG_PACKAGE_wpad-mini is not set
+# CONFIG_PACKAGE_hostapd-common is not set
+# CONFIG_PACKAGE_iw is not set
+# CONFIG_PACKAGE_iwinfo is not set
+# CONFIG_PACKAGE_kmod-mac80211 is not set
+# CONFIG_PACKAGE_kmod-cfg80211 is not set
+# CONFIG_PACKAGE_kmod-rt2800-soc is not set
+# CONFIG_PACKAGE_kmod-mt76x2 is not set
+# CONFIG_PACKAGE_wireless-regdb is not set
+# CONFIG_PACKAGE_ppp is not set
+# CONFIG_PACKAGE_ppp-mod-pppoe is not set
+# CONFIG_PACKAGE_kmod-ppp is not set
+# CONFIG_PACKAGE_kmod-pppoe is not set
+# CONFIG_PACKAGE_kmod-sdhci-mt7620 is not set

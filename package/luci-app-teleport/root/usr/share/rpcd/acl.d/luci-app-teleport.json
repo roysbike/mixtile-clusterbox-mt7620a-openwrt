@@ -1,0 +1,23 @@
+{
+	"luci-app-teleport": {
+		"description": "Grant access to the Teleport agent",
+		"read": {
+			"ubus": {
+				"teleport": [ "status", "server", "versions", "log" ]
+			},
+			"file": {
+				"/etc/teleport/kubeconfig": [ "read" ]
+			},
+			"uci": [ "teleport" ]
+		},
+		"write": {
+			"ubus": {
+				"teleport": [ "install", "service" ]
+			},
+			"file": {
+				"/etc/teleport/kubeconfig": [ "write" ]
+			},
+			"uci": [ "teleport" ]
+		}
+	}
+}
