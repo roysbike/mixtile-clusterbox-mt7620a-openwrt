@@ -5,6 +5,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-13
+
+Stable BMC part of OpenMIOP Stack v0.4.0. Same content as 0.2.0-rc.2
+except the package pin: `kmod-omi-rc` and `openmiop` 0.4.0 from
+pcie-ep-net v0.4.0 (`c607b86`, code identical to 0.4.0-rc.2). Sums up
+0.2.0-rc.1 and 0.2.0-rc.2.
+
+### Added
+
+- Gateway pull (`omi-rc` from pcie-ep-net v0.4.0): blades with the v0.4
+  driver read LAN/internet -> blade frames from BMC memory with their
+  eDMA; LAN -> blade 92 -> 193-198 Mbit/s.
+- Firewall software flow offloading on by default
+  (`/etc/uci-defaults/90-openmiop-flow-offload`).
+
+### Fixed
+
+- `omi-rc` writes the credit when it resyncs a blade's gateway ring
+  (0.2.0-rc.2).
+
+### Tested
+
+- v0.2.0-rc.2 (same `omi-rc` code) flashed on the lab Cluster Box
+  2026-10-13 ~17:13Z: all four blades active with gateway pull 47 s after
+  power-on, NVMe live, `rx_fifo_errors` 0, flow offloading on. That BMC
+  reboot force-demoted a DRBD Primary on a blade (DRBD 9.3.4,
+  LINBIT/drbd#153), recovered by a database failover.
+
 ## [0.2.0-rc.2] - 2026-10-13
 
 The BMC part of OpenMIOP Stack v0.4.0-rc.2.
