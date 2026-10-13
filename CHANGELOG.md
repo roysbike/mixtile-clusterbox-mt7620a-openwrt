@@ -5,6 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-14
+
+The BMC part of OpenMIOP Stack v0.5.0.
+
+### Added
+
+- `kmod-omi-rc` and `openmiop` 0.5.0 from pcie-ep-net v0.5.0 (`6fbcff1`):
+  gateway zero-copy. Blades with the v0.5 driver read unicast frames
+  from the BMC's stack straight from its buffers; `omi-rc` no longer
+  copies them. LAN -> blade 196-198 -> 275-281 Mbit/s. Parameter `zc`
+  (default on); older blades keep the copy path.
+- CI image check: `omi-rc` has zero-copy (parameter `zc`).
+
+### Tested
+
+- The same `omi-rc` code loaded by hand on firmware v0.2.0 with a v0.5
+  blade (.108) and v0.4.0 blades alongside: SHA-256 3/3, 16 stress rounds
+  clean, `omi-rc` reload during a download recovered, no memory leak over
+  2.16 million zero-copy frames.
+
 ## [0.2.0] - 2026-10-13
 
 Stable BMC part of OpenMIOP Stack v0.4.0. Same content as 0.2.0-rc.2
