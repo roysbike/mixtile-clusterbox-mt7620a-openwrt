@@ -5,6 +5,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0-rc.1] - 2026-10-13
+
+The BMC part of OpenMIOP Stack v0.4.0-rc.1: a faster gateway from the
+LAN and internet to the blades.
+
+### Added
+
+- `kmod-omi-rc` and `openmiop` from pcie-ep-net v0.4.0-rc.1 (`35884c8`):
+  gateway pull. Blades with the v0.4 driver read LAN/internet -> blade
+  frames from BMC memory with their eDMA; the BMC writes only the slot
+  header over PCIe. Blades on v0.3.x keep the old path.
+- Firewall software flow offloading on by default
+  (`/etc/uci-defaults/90-openmiop-flow-offload`, only if
+  `flow_offloading` is not set yet).
+- CI image check: `omi-rc` has gateway pull, the offloading default is
+  in the image.
+
+### Tested
+
+On the lab Cluster Box (firmware v0.1.1, the v0.4.0-rc.1 `omi-rc` code
+loaded by hand, flow offloading switched on by hand), .108 on a
+mixtile-talos test image with the v0.4 driver, compared at the same
+time with .133 on v0.3.0:
+
+- LAN -> blade through the BMC: 141-145 Mbit/s (v0.3.0 blade: 92-95);
+  internet -> blade 152-155 Mbit/s (97-106); BMC -> blade without NAT
+  204 Mbit/s (130); 444 158 frames pulled, 0 errors;
+- flow offloading: blade -> LAN 207-210 -> 247-251 Mbit/s, BMC CPU
+  95 -> 85 %.
+
 ## [0.1.1] - 2026-10-12
 
 Patch release: the BMC part of OpenMIOP Stack v0.3.1. Only `omi-rc`

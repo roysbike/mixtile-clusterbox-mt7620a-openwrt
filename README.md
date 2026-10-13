@@ -11,6 +11,9 @@ and a GitHub-Releases update mechanism.
 
 Current release: **v0.1.1** — see [CHANGELOG.md](CHANGELOG.md) and the
 [release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1).
+Release candidate: **v0.2.0-rc.1** (OpenMIOP Stack v0.4.0-rc.1: gateway
+pull, ~1.5x faster LAN -> blades; flow offloading on by default), see
+[release notes](release-notes/v0.2.0-rc.1.md).
 
 ## Hardware and who this is for
 
@@ -235,7 +238,9 @@ Feeds are pinned to commits in `feeds.conf.default`.
 
 ## Known limitations (v0.1.1)
 
-* OpenMIOP: the BMC gateway is management-grade (~12 Mbit/s); a BMC
+* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~90 Mbit/s
+  LAN -> blade, ~140-150 with gateway pull from v0.2.0-rc.1; ~270 blade
+  -> LAN); a BMC
   reboot resets every blade link (on Blade 3 also the M.2 NVMe, which
   mixtile-talos v0.3.0 recovers); with the fallback helper, root-port
   re-enumeration pauses fabric traffic ~1-2 s and a blade that

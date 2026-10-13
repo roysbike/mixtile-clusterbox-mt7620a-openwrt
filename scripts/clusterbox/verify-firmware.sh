@@ -84,7 +84,11 @@ omirc=$r/lib/modules/$KERNEL_VERSION/omi-rc.ko
 [ -s "$omirc" ] || fail "/lib/modules/$KERNEL_VERSION/omi-rc.ko missing"
 ! grep -rqs '^omi-rc\|^omi_rc' "$r/etc/modules.d/" || fail "omi-rc must not be autoloaded (openmiop init picks module or helper)"
 grep -q 'omi-rc.ko' "$r/etc/init.d/openmiop" || fail "openmiop init does not load omi-rc"
-ok "omi-rc.ko for $KERNEL_VERSION, loaded by the openmiop init"
+strings "$omirc" | grep -q '^parmtype=pull:bool' || fail "omi-rc has no gateway pull (parameter pull)"
+ok "omi-rc.ko for $KERNEL_VERSION, with gateway pull, loaded by the openmiop init"
+grep -q 'flow_offloading=1' "$r/etc/uci-defaults/90-openmiop-flow-offload" 2>/dev/null ||
+	fail "flow offloading default (uci-defaults/90-openmiop-flow-offload) missing"
+ok "firewall flow offloading on by default"
 
 tun=$(find "$r/lib/modules/$KERNEL_VERSION" -name tun.ko | head -n1)
 [ -n "$tun" ] || fail "tun.ko missing"
