@@ -7,11 +7,11 @@ include $(INCLUDE_DIR)/kernel.mk
 # not autoloaded: the openmiop init loads it (helper as fallback).
 PKG_NAME:=omi-rc
 PKG_VERSION:=0.3.1
-PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=bd2cfbaf9375e66e0f83e6bdf9f2c735803f9940
+PKG_RELEASE:=3
+PKG_SOURCE_VERSION:=26441d4ab42f77ea40fbc0f560dd0abb4ff27029
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=1f43e21ba005f06a9e3735b996c8c198e5ca2e5970ade81c4b39c590c360cf53
+PKG_HASH:=91b2d3a3473f9c3f81d43e6325d365bba2b33fd1ff51b9dbc822ada7759ba0c9
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
