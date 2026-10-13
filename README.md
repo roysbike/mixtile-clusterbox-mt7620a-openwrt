@@ -9,12 +9,10 @@ for the four Blade 3 slots (`nodectl` + LuCI), the BMC side of **OpenMIOP**
 module, with the `openmiop-rc` helper as fallback), a firmware identity file
 and a GitHub-Releases update mechanism.
 
-Current release: **v0.1.1** — see [CHANGELOG.md](CHANGELOG.md) and the
-[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1).
-Release candidate: **v0.2.0-rc.2** (OpenMIOP Stack v0.4.0-rc.2: gateway
-pull, ~1.5x faster LAN -> blades; flow offloading on by default; rc.2:
-gateway fix under load), see
-[release notes](release-notes/v0.2.0-rc.2.md).
+Current release: **v0.2.0** (OpenMIOP Stack v0.4.0: gateway pull, ~2x
+faster LAN -> blades; flow offloading on by default) — see the
+[release notes](release-notes/v0.2.0.md), [CHANGELOG.md](CHANGELOG.md) and the
+[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.2.0).
 
 ## Hardware and who this is for
 
@@ -58,12 +56,12 @@ B1  B2   B3   B4
  Talos/openmiop or Debian/openmiop, omi0 10.20.0.x
 ```
 
-| OpenMIOP Stack v0.3.1 | |
+| OpenMIOP Stack v0.4.0 | |
 | --- | --- |
-| Protocol | OpenMIOP v4 between blades, push mode to the BMC |
-| Blade driver, BMC module | [pcie-ep-net v0.3.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.3.1) |
-| Blade OS | [mixtile-talos v0.3.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.3.0) (same blade driver) |
-| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.1.1](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.1.1) (this repository) |
+| Protocol | OpenMIOP v4 between blades, push mode and gateway pull to the BMC |
+| Blade driver, BMC module | [pcie-ep-net v0.4.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.4.0) |
+| Blade OS | [mixtile-talos v0.4.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.4.0) |
+| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.2.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.2.0) (this repository) |
 
 The blades run the endpoint driver (`openmiop-ep.ko`, ARM64; not part of this
 firmware). The BMC runs the `omi-rc` kernel module (push mode: the blades
@@ -117,7 +115,7 @@ and keeps configuration (`sysupgrade -l`), `/etc/rc.d`, `/root/.ssh`,
 `/home`, `/opt`:
 
 ```sh
-V=v0.1.1
+V=v0.2.0
 I=openmiop-${V#v}-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin
 B=https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/download/$V
 for f in $I clusterbox-firmware.json SHA256SUMS mixtile-update; do curl -fLO "$B/$f"; done
@@ -211,7 +209,7 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
 ```sh
 cat /etc/mixtile-release
 lsmod | grep omi_rc; dmesg | grep omi0            # "push mode", "node N active" per blade
-cat /proc/loadavg                                 # ~0 on an idle BMC (v0.1.1)
+cat /proc/loadavg                                 # ~0 on an idle BMC (v0.1.1 and later)
 lspci -d 1d87:4f4d -vv | grep -E 'LnkSta|Region 0'
 ip addr show omi0                                 # 10.20.0.1/24, mtu 9000
 ping -c3 10.20.0.<blade>
@@ -237,11 +235,14 @@ MIXTILE_FW_VERSION=$(git describe --tags --always) ./build.sh firmware
 
 Feeds are pinned to commits in `feeds.conf.default`.
 
-## Known limitations (v0.1.1)
+## Known limitations (v0.2.0)
 
-* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~90 Mbit/s
-  LAN -> blade, ~140-150 with gateway pull from v0.2.0-rc.1; ~270 blade
-  -> LAN); a BMC
+* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~195 Mbit/s
+  LAN -> blade with gateway pull, ~90 without; ~230-270 blade -> LAN); a
+  BMC reboot can force-demote a DRBD 9.3.4 Primary on the blades if a
+  Secondary holds stale out-of-sync bits
+  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153)): check
+  `out-of-sync:` 0 before rebooting the BMC; a BMC
   reboot resets every blade link (on Blade 3 also the M.2 NVMe, which
   mixtile-talos v0.3.0 recovers); with the fallback helper, root-port
   re-enumeration pauses fabric traffic ~1-2 s and a blade that
