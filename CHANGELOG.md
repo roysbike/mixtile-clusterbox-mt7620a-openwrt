@@ -19,8 +19,9 @@ gateway pull and zero-copy).
   sysfs paths for fan-boot and nodectl); the vendor gpio-pwms kernel patch
   is gone (its tachometer reading was broken and unused).
 - Blade console driver ch343 updated to WCH V2.2.
-- `omi-rc`/`openmiop` from pcie-ep-net `ebc5882` (builds with Linux 6.1+;
-  same code as v0.5.0 otherwise).
+- `omi-rc`/`openmiop` from pcie-ep-net
+  [v0.5.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.5.1)
+  (`omi-rc` builds with Linux 6.1+; same at run time as v0.5.0).
 - Firmware version shown by LuCI from `/etc/openwrt_release`
   (`OpenWrt 25.12.5 ClusterBox vX.Y.Z`).
 - SD image built for this board only (kernel padded to 10 MiB, squashfs

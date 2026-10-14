@@ -5,12 +5,12 @@ include $(TOPDIR)/rules.mk
 # omi-rc module (kmod-omi-rc) and falls back to the userspace helper
 # (sysfs PCI config/resource files and a TAP device, needs kmod-tun).
 PKG_NAME:=openmiop
-PKG_VERSION:=0.5.0
-PKG_RELEASE:=2
-PKG_SOURCE_VERSION:=ebc58822ab0332d2ba33cec2a5be2f3ba02d24d6
+PKG_VERSION:=0.5.1
+PKG_RELEASE:=1
+PKG_SOURCE_VERSION:=63ff349f8fbca6351f11922301af6708f4ba11f3
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=cb82ad4463909299516d9c5c41eb5308201111ecc15a5629865dc9a1581ba08c
+PKG_HASH:=d656e64fcef9dff5706e66f3aadbc4939aded8e4b1f599e39389ef09a066c34c
 PKG_BUILD_DIR:=$(BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
