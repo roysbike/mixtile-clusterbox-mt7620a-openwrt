@@ -34,7 +34,9 @@ install -m 0755 "$top/package/mixtile-update/files/mixtile-update" "$out/mixtile
 
 for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl; do
 	# Kernel packages land with the target, the rest per architecture.
-	f=$(ls "$pdir"/${p}_*.ipk "$tdir"/packages/${p}_*.ipk 2>/dev/null | head -n1 || true)
+	# OpenWrt 25.12: apk (name-version.apk); before: opkg (name_version.ipk).
+	f=$(ls "$pdir"/${p}-[0-9]*.apk "$tdir"/packages/${p}-[0-9]*.apk \
+		"$pdir"/${p}_*.ipk "$tdir"/packages/${p}_*.ipk 2>/dev/null | head -n1 || true)
 	[ -n "$f" ] || { echo "missing package $p" >&2; exit 1; }
 	cp "$f" "$extras/"
 done
