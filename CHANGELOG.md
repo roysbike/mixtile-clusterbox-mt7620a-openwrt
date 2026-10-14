@@ -1,9 +1,44 @@
 # Changelog
 
-ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
+ClusterBox BMC firmware (OpenWrt on the Mixtile Cluster Box MT7620A; 25.12 from
+v0.4.0, 23.05 before).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.4.0-rc.1] - 2026-10-14
+
+The firmware moves from OpenWrt 23.05.2 (Linux 5.15.150) to OpenWrt
+25.12.5 (Linux 6.12.94). OpenMIOP unchanged (Stack v0.5.0, `omi-rc` with
+gateway pull and zero-copy).
+
+### Changed
+
+- Base: OpenWrt 25.12.5, Linux 6.12, package manager apk instead of opkg.
+- Fans on the upstream `pwm-gpio` driver (one PWM chip per fan, same
+  sysfs paths for fan-boot and nodectl); the vendor gpio-pwms kernel patch
+  is gone (its tachometer reading was broken and unused).
+- Blade console driver ch343 updated to WCH V2.2.
+- `omi-rc`/`openmiop` from pcie-ep-net `ebc5882` (builds with Linux 6.1+;
+  same code as v0.5.0 otherwise).
+- Firmware version shown by LuCI from `/etc/openwrt_release`
+  (`OpenWrt 25.12.5 ClusterBox vX.Y.Z`).
+- SD image built for this board only (kernel padded to 10 MiB, squashfs
+  after it), with size checks; same layout on the card as before.
+- sudo rule for the `sudo` group in `/etc/sudoers.d/mixtile`.
+
+### Removed
+
+- Wi-Fi stack (the box has no radio; hostapd and wpa_supplicant ran for
+  nothing), PPP/PPPoE, OpenVPN and its firewall zone, DDNS, lrzsz, pv,
+  memtool, f2fs tools, the initramfs image, Mixtile's vendor `miop.ko`
+  (replaced by `omi-rc`) and the LuCI 23.05 overrides (login page, flash
+  and password pages).
+
+### Fixed
+
+- Files in the squashfs belong to root again (the 23.05 image carried the
+  build user's uid 1001/gid 121 in `/rom`).
 
 ## [0.3.0] - 2026-10-14
 
