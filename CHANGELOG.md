@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Documentation: the BMC's serial console (3-pin UART header TX/RX/GND,
+  57600 8N1 per Mixtile, kernel console 115200), with Mixtile's pinout
+  PDF; README EN/RU.
+
 ### Fixed
 
 - Documentation: the BMC has no microSD card. Kernel, rootfs and overlay
