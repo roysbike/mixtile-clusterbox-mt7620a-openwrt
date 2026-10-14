@@ -217,6 +217,29 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
   download and verification of a release ran on that BMC. Not yet tested:
   `mixtile-update install` (the rc.1 → rc.2 update is the first).
 
+### Serial console (BMC UART)
+
+The controller board has a 3-pin UART header for the MT7620A, next to a
+push button and the RTC battery, at the edge of the board. The pin header
+(2.54 mm) is not fitted: solder one in to use it. Pinout, left to right
+as in Mixtile's photo ([UART of Controller Board, PDF](https://downloads.mixtile.com/blade3/file/UART%20of%20Controller%20Board.pdf)):
+
+| Pin | Connect to (USB-UART adapter, e.g. FT232) |
+| --- | --- |
+| TX | RX |
+| RX | TX |
+| GND | GND |
+
+Use a 3.3 V adapter. Mixtile gives the baud rate as **57600** (8N1).
+This firmware's kernel command line sets `console=ttyS0,115200`: if the
+output turns to garbage after the boot loader, switch the terminal to
+115200. Not yet used on the lab unit; it is the way to see why a
+firmware does not boot.
+
+```sh
+picocom -b 57600 /dev/ttyUSB0      # Ctrl-A Ctrl-B to change the speed
+```
+
 ## Verify OpenMIOP on the BMC
 
 ```sh
