@@ -188,10 +188,14 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
   controller. sysupgrade writes the image at sector 16 of `mmcblk0`
   (kernel, then the squashfs rootfs at 10 MiB); partition table and
   overlay (`mmcblk0p3`) stay as they are.
-* If the BMC does not come back after a write, the image has to be
-  written again outside the running firmware, e.g. from the BMC's U-Boot
-  over the serial console (procedure not documented here yet). Such a
-  rewrite can lose the configuration: back it up before every update:
+* If the BMC does not come back after a write, restore the factory
+  firmware with the reset button: power the box off, hold the BMC's
+  reset button, power on and keep holding it until the LED starts
+  blinking, then release it. The BMC comes up with Mixtile's factory
+  firmware and factory settings; install the wanted ClusterBox release
+  again from there (LuCI *Flash Firmware*, see First install). Done on
+  the lab unit on 2026-10-14 after a firmware that did not boot. The
+  configuration is lost, so back it up before every update:
 
   ```sh
   sysupgrade -b /tmp/bmc-config.tar.gz   # then copy it off the BMC
@@ -199,7 +203,9 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
   ```
 
   While the BMC is down, the blades lose their LAN as well (their
-  Ethernet goes through the BMC's switch).
+  Ethernet goes through the BMC's switch). After the restore, set the
+  configuration up again (or restore the backup): e.g. the `omi0`
+  firewall zone, NAT rules and the NTP server the blades use.
 * Blades keep power while the BMC is down or rebooting; their OS keeps
   running. Every blade link resets; blades on pcie-ep-net v0.3 reconnect
   to each other after ~12 s by themselves, and the BMC (`omi0`
@@ -258,7 +264,7 @@ Feeds are pinned to commits in `feeds.conf.default`.
   the fabric (`omi-rc` never reads a blade). Full list:
   [pcie-ep-net](https://github.com/roysbike/pcie-ep-net#known-limitations).
 * Updates: releases not signed; no A/B rootfs (a firmware that does not
-  boot has to be rewritten outside it, see Recovery).
+  boot needs the factory restore with the reset button, see Recovery).
 * v0.3.0 image: `/home/mixtile` belongs to root, so `mixtile` cannot
   create `~/.ssh`. Fix once: `chown mixtile:mixtile /home/mixtile`.
 

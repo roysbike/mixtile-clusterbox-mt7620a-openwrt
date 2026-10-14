@@ -10,9 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Documentation: the BMC has no microSD card. Kernel, rootfs and overlay
   are on the on-board `mmcblk0` (U-Boot, its environment and factory data
   on SPI flash). The "rewrite the microSD on a PC" recovery in the README
-  and the v0.1.0-rc release notes was wrong and is removed; a BMC that
-  does not boot has to be rewritten outside the firmware (U-Boot, serial
-  console). README: back up the configuration before every update.
+  and the v0.1.0-rc release notes was wrong and is removed. README
+  Recovery: a BMC that does not boot is brought back with the factory
+  restore (hold reset while powering on until the LED blinks), then the
+  release is installed again; back up the configuration before every
+  update.
 - Documentation: known v0.3.0 issue, `/home/mixtile` belongs to root
   (`mixtile` cannot create `~/.ssh`).
 
@@ -423,7 +425,7 @@ v0.1.0-rc.1.
   on-board `mmcblk0`) and recovery of a BMC that does not boot. The OpenMIOP helper and
   nodectl it contains were tested as separately installed binaries.
 - No A/B rootfs: a failed write needs the firmware rewritten outside
-  the BMC's OpenWrt (U-Boot). Releases are not signed yet (SHA-256 over HTTPS only); signing is
+  the BMC's OpenWrt (factory restore with the reset button). Releases are not signed yet (SHA-256 over HTTPS only); signing is
   required before a stable v1.0.
 - OpenMIOP: root-port re-enumeration pauses all fabric traffic ~1-2 s
   when a blade appears without a BAR address; a blade that disappears
