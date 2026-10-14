@@ -16,11 +16,10 @@
 #include <linux/spinlock.h>
 #include <linux/skbuff.h>
 #include <linux/of.h>
-#include <linux/of_platform.h>
 #include <linux/of_gpio.h>
-#include <linux/rtl8366.h>
 #include <linux/version.h>
 #include <linux/of_mdio.h>
+#include <linux/platform_device.h>
 
 #ifdef CONFIG_RTL8366_SMI_DEBUG_FS
 #include <linux/debugfs.h>
@@ -254,9 +253,9 @@ static int __rtl8366_smi_read_reg(struct rtl8366_smi *smi, u32 addr, u32 *data)
 #define MDC_MDIO_WRITE_OP		0x0003
 #define MDC_REALTEK_PHY_ADDR		0x0
 
-int __rtl8366_mdio_read_reg(struct rtl8366_smi *smi, u32 addr, u32 *data)
+static int __rtl8366_mdio_read_reg(struct rtl8366_smi *smi, u32 addr, u32 *data)
 {
-	u32 phy_id = MDC_REALTEK_PHY_ADDR;
+	u32 phy_id = smi->phy_id;
 	struct mii_bus *mbus = smi->ext_mbus;
 
 	BUG_ON(in_interrupt());
@@ -293,7 +292,7 @@ int __rtl8366_mdio_read_reg(struct rtl8366_smi *smi, u32 addr, u32 *data)
 
 static int __rtl8366_mdio_write_reg(struct rtl8366_smi *smi, u32 addr, u32 data)
 {
-	u32 phy_id = MDC_REALTEK_PHY_ADDR;
+	u32 phy_id = smi->phy_id;
 	struct mii_bus *mbus = smi->ext_mbus;
 
 	BUG_ON(in_interrupt());
@@ -590,7 +589,7 @@ static int rtl8366_set_pvid(struct rtl8366_smi *smi, unsigned port,
 	return -ENOSPC;
 }
 
-int rtl8366_enable_vlan(struct rtl8366_smi *smi, int enable)
+static int rtl8366_smi_enable_vlan(struct rtl8366_smi *smi, int enable)
 {
 	int err;
 
@@ -607,9 +606,8 @@ int rtl8366_enable_vlan(struct rtl8366_smi *smi, int enable)
 
 	return err;
 }
-EXPORT_SYMBOL_GPL(rtl8366_enable_vlan);
 
-static int rtl8366_enable_vlan4k(struct rtl8366_smi *smi, int enable)
+static int rtl8366_smi_enable_vlan4k(struct rtl8366_smi *smi, int enable)
 {
 	int err;
 
@@ -629,7 +627,7 @@ static int rtl8366_enable_vlan4k(struct rtl8366_smi *smi, int enable)
 	return 0;
 }
 
-int rtl8366_enable_all_ports(struct rtl8366_smi *smi, int enable)
+static int rtl8366_smi_enable_all_ports(struct rtl8366_smi *smi, int enable)
 {
 	int port;
 	int err;
@@ -642,16 +640,15 @@ int rtl8366_enable_all_ports(struct rtl8366_smi *smi, int enable)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rtl8366_enable_all_ports);
 
-int rtl8366_reset_vlan(struct rtl8366_smi *smi)
+static int rtl8366_smi_reset_vlan(struct rtl8366_smi *smi)
 {
 	struct rtl8366_vlan_mc vlanmc;
 	int err;
 	int i;
 
-	rtl8366_enable_vlan(smi, 0);
-	rtl8366_enable_vlan4k(smi, 0);
+	rtl8366_smi_enable_vlan(smi, 0);
+	rtl8366_smi_enable_vlan4k(smi, 0);
 
 	/* clear VLAN member configurations */
 	vlanmc.vid = 0;
@@ -667,14 +664,13 @@ int rtl8366_reset_vlan(struct rtl8366_smi *smi)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rtl8366_reset_vlan);
 
 static int rtl8366_init_vlan(struct rtl8366_smi *smi)
 {
 	int port;
 	int err;
 
-	err = rtl8366_reset_vlan(smi);
+	err = rtl8366_smi_reset_vlan(smi);
 	if (err)
 		return err;
 
@@ -695,7 +691,7 @@ static int rtl8366_init_vlan(struct rtl8366_smi *smi)
 			return err;
 	}
 
-	return rtl8366_enable_vlan(smi, 1);
+	return rtl8366_smi_enable_vlan(smi, 1);
 }
 
 #ifdef CONFIG_RTL8366_SMI_DEBUG_FS
@@ -1014,12 +1010,7 @@ static inline void rtl8366_debugfs_remove(struct rtl8366_smi *smi) {}
 static int rtl8366_smi_mii_init(struct rtl8366_smi *smi)
 {
 	int ret;
-
-#ifdef CONFIG_OF
 	struct device_node *np = NULL;
-
-	np = of_get_child_by_name(smi->parent->of_node, "mdio-bus");
-#endif
 
 	smi->mii_bus = mdiobus_alloc();
 	if (smi->mii_bus == NULL) {
@@ -1036,11 +1027,10 @@ static int rtl8366_smi_mii_init(struct rtl8366_smi *smi)
 	smi->mii_bus->parent = smi->parent;
 	smi->mii_bus->phy_mask = ~(0x1f);
 
-#ifdef CONFIG_OF
+	np = of_get_child_by_name(smi->parent->of_node, "mdio-bus");
 	if (np)
 		ret = of_mdiobus_register(smi->mii_bus, np);
 	else
-#endif
 		ret = mdiobus_register(smi->mii_bus);
 
 	if (ret)
@@ -1073,15 +1063,15 @@ int rtl8366_sw_reset_switch(struct switch_dev *dev)
 	if (err)
 		return err;
 
-	err = rtl8366_reset_vlan(smi);
+	err = rtl8366_smi_reset_vlan(smi);
 	if (err)
 		return err;
 
-	err = rtl8366_enable_vlan(smi, 1);
+	err = rtl8366_smi_enable_vlan(smi, 1);
 	if (err)
 		return err;
 
-	return rtl8366_enable_all_ports(smi, 1);
+	return rtl8366_smi_enable_all_ports(smi, 1);
 }
 EXPORT_SYMBOL_GPL(rtl8366_sw_reset_switch);
 
@@ -1343,9 +1333,9 @@ int rtl8366_sw_set_vlan_enable(struct switch_dev *dev,
 		return -EINVAL;
 
 	if (attr->ofs == 1)
-		err = rtl8366_enable_vlan(smi, val->value.i);
+		err = rtl8366_smi_enable_vlan(smi, val->value.i);
 	else
-		err = rtl8366_enable_vlan4k(smi, val->value.i);
+		err = rtl8366_smi_enable_vlan4k(smi, val->value.i);
 
 	return err;
 }
@@ -1415,45 +1405,6 @@ static void __rtl8366_smi_cleanup(struct rtl8366_smi *smi)
 	}
 }
 
-enum rtl8366_type rtl8366_smi_detect(struct rtl8366_platform_data *pdata)
-{
-	static struct rtl8366_smi smi;
-	enum rtl8366_type type = RTL8366_TYPE_UNKNOWN;
-	u32 reg = 0;
-
-	memset(&smi, 0, sizeof(smi));
-	smi.gpio_sda = pdata->gpio_sda;
-	smi.gpio_sck = pdata->gpio_sck;
-	smi.clk_delay = 10;
-	smi.cmd_read  = 0xa9;
-	smi.cmd_write = 0xa8;
-
-	if (__rtl8366_smi_init(&smi, "rtl8366"))
-		goto out;
-
-	if (rtl8366_smi_read_reg(&smi, 0x5c, &reg))
-		goto cleanup;
-
-	switch(reg) {
-	case 0x6027:
-		printk("Found an RTL8366S switch\n");
-		type = RTL8366_TYPE_S;
-		break;
-	case 0x5937:
-		printk("Found an RTL8366RB switch\n");
-		type = RTL8366_TYPE_RB;
-		break;
-	default:
-		printk("Found an Unknown RTL8366 switch (id=0x%04x)\n", reg);
-		break;
-	}
-
-cleanup:
-	__rtl8366_smi_cleanup(&smi);
-out:
-	return type;
-}
-
 int rtl8366_smi_init(struct rtl8366_smi *smi)
 {
 	int err;
@@ -1494,7 +1445,7 @@ int rtl8366_smi_init(struct rtl8366_smi *smi)
 		goto err_free_sck;
 	}
 
-	err = rtl8366_enable_all_ports(smi, 1);
+	err = rtl8366_smi_enable_all_ports(smi, 1);
 	if (err)
 		goto err_free_sck;
 
@@ -1521,7 +1472,6 @@ void rtl8366_smi_cleanup(struct rtl8366_smi *smi)
 }
 EXPORT_SYMBOL_GPL(rtl8366_smi_cleanup);
 
-#ifdef CONFIG_OF
 static void rtl8366_smi_reset(struct rtl8366_smi *smi, bool active)
 {
 	if (active)
@@ -1530,7 +1480,7 @@ static void rtl8366_smi_reset(struct rtl8366_smi *smi, bool active)
 		reset_control_deassert(smi->reset);
 }
 
-int rtl8366_smi_probe_of(struct platform_device *pdev, struct rtl8366_smi *smi)
+static int rtl8366_smi_probe_of(struct platform_device *pdev, struct rtl8366_smi *smi)
 {
 	int sck = of_get_named_gpio(pdev->dev.of_node, "gpio-sck", 0);
 	int sda = of_get_named_gpio(pdev->dev.of_node, "gpio-sda", 0);
@@ -1549,6 +1499,9 @@ int rtl8366_smi_probe_of(struct platform_device *pdev, struct rtl8366_smi *smi)
 			"cannot find mdio bus from bus handle (yet)");
 		goto try_gpio;
 	}
+
+	if (of_property_read_u32(np, "phy-id", &smi->phy_id))
+		smi->phy_id = MDC_REALTEK_PHY_ADDR;
 
 	return 0;
 
@@ -1570,29 +1523,6 @@ try_gpio:
 
 	return 0;
 }
-#else
-static inline int rtl8366_smi_probe_of(struct platform_device *pdev, struct rtl8366_smi *smi)
-{
-	return -ENODEV;
-}
-#endif
-
-int rtl8366_smi_probe_plat(struct platform_device *pdev, struct rtl8366_smi *smi)
-{
-	struct rtl8366_platform_data *pdata = pdev->dev.platform_data;
-
-	if (!pdev->dev.platform_data) {
-		dev_err(&pdev->dev, "no platform data specified\n");
-		return -EINVAL;
-	}
-
-	smi->gpio_sda = pdata->gpio_sda;
-	smi->gpio_sck = pdata->gpio_sck;
-	smi->hw_reset = pdata->hw_reset;
-
-	return 0;
-}
-
 
 struct rtl8366_smi *rtl8366_smi_probe(struct platform_device *pdev)
 {
@@ -1603,11 +1533,7 @@ struct rtl8366_smi *rtl8366_smi_probe(struct platform_device *pdev)
 	if (!smi)
 		return NULL;
 
-	if (pdev->dev.of_node)
-		err = rtl8366_smi_probe_of(pdev, smi);
-	else
-		err = rtl8366_smi_probe_plat(pdev, smi);
-
+	err = rtl8366_smi_probe_of(pdev, smi);
 	if (err)
 		goto free_smi;
 

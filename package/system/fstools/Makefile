@@ -12,9 +12,9 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/fstools.git
-PKG_MIRROR_HASH:=4ec370a1cdc9fa69131f1403b064d2e05d54ee865411917410d7540454265319
-PKG_SOURCE_DATE:=2023-02-28
-PKG_SOURCE_VERSION:=bfe882d5ff4eeebb8f57c8a0f9b9e767a57870d8
+PKG_MIRROR_HASH:=c266c906cc40b0422f1e74e0118f68bb123c04233dfbf4689847eba74abec4eb
+PKG_SOURCE_DATE:=2026-05-23
+PKG_SOURCE_VERSION:=16718b6e3c0fc7db7be6ae5848db0eae88ac8a8b
 CMAKE_INSTALL:=1
 
 PKG_LICENSE:=GPL-2.0
@@ -22,6 +22,8 @@ PKG_LICENSE_FILES:=
 
 PKG_BUILD_FLAGS:=no-mips16
 PKG_FLAGS:=nonshared
+
+# check_extroot() is unused with patches/001-cancel-check_extroot.patch.
 EXTRA_CFLAGS += -Wno-unused-function
 PKG_BUILD_DEPENDS := util-linux
 PKG_CONFIG_DEPENDS := CONFIG_NAND_SUPPORT CONFIG_FSTOOLS_UBIFS_EXTROOT
@@ -95,9 +97,10 @@ endef
 define Package/fstools/install
 	$(INSTALL_DIR) $(1)/sbin $(1)/lib
 
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/{mount_root,jffs2reset} $(1)/sbin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/{mount_root,factoryreset} $(1)/sbin/
 	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/lib/libfstools.so $(1)/lib/
-	$(LN) jffs2reset $(1)/sbin/jffs2mark
+	$(LN) factoryreset $(1)/sbin/jffs2mark
+	$(LN) factoryreset $(1)/sbin/jffs2reset
 endef
 
 define Package/snapshot-tool/install

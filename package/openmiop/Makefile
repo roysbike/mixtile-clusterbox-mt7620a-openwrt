@@ -6,11 +6,11 @@ include $(TOPDIR)/rules.mk
 # (sysfs PCI config/resource files and a TAP device, needs kmod-tun).
 PKG_NAME:=openmiop
 PKG_VERSION:=0.5.0
-PKG_RELEASE:=1
-PKG_SOURCE_VERSION:=6fbcff126da32d964aa9beeefea63230cd695ed0
+PKG_RELEASE:=2
+PKG_SOURCE_VERSION:=ebc58822ab0332d2ba33cec2a5be2f3ba02d24d6
 PKG_SOURCE:=pcie-ep-net-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/roysbike/pcie-ep-net/tar.gz/$(PKG_SOURCE_VERSION)?
-PKG_HASH:=8a021cb2c07f0412e972b29fb3bd36b2a2d9b24de93fb12a0d119b9a2a34bed7
+PKG_HASH:=cb82ad4463909299516d9c5c41eb5308201111ecc15a5629865dc9a1581ba08c
 PKG_BUILD_DIR:=$(BUILD_DIR)/pcie-ep-net-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE

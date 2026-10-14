@@ -7,7 +7,8 @@
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 PKG_NAME:=ch343
-PKG_RELEASE:=1
+PKG_RELEASE:=2
+# src/: WCHSoftGroup/ch343ser_linux driver/ at b5515b91110f (V2.2, 2026-04, Linux 6.12 support).
 include $(INCLUDE_DIR)/package.mk
 EXTRA_CFLAGS:=CONFIG_PACKAGE_kmod-ch343=m
 EXTRA_CFLAGS:= \

@@ -57,6 +57,12 @@ jobs:
       contents: write
     env:
       SELF_HOSTED: ${{ needs.runner.outputs.self-hosted }}
+    # OpenWrt 25.12 tree in its own directory: the self-hosted runner keeps
+    # the OpenWrt 23.05 build tree (toolchain, kernel) of v120 in the
+    # workspace root, and the two must not mix.
+    defaults:
+      run:
+        working-directory: owrt-25.12
 
     steps:
       - name: Maximize build space
@@ -75,11 +81,13 @@ jobs:
         # The build runs as root (sudo); hand the tree back to the runner
         # user so checkout and config steps can update it.
         if: env.SELF_HOSTED == 'true'
+        working-directory: ${{ github.workspace }}
         run: sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
 
       - name: Checkout source
         uses: actions/checkout@v7
         with:
+          path: owrt-25.12
           fetch-depth: 0
           # Self-hosted: keep the build tree (toolchain, host tools,
           # downloads, built packages) from earlier runs.
@@ -125,10 +133,10 @@ jobs:
         if: env.SELF_HOSTED != 'true'
         uses: actions/cache@v6
         with:
-          path: dl
-          key: ${{ runner.os }}-clusterbox-v120-dl-${{ hashFiles('build.sh', 'feeds.conf.default', 'config/BoardConfig/cluster-box-config', 'package/openmiop/Makefile') }}
+          path: owrt-25.12/dl
+          key: ${{ runner.os }}-clusterbox-2512-dl-${{ hashFiles('owrt-25.12/build.sh', 'owrt-25.12/feeds.conf.default', 'owrt-25.12/config/BoardConfig/cluster-box-config', 'owrt-25.12/package/openmiop/Makefile') }}
           restore-keys: |
-            ${{ runner.os }}-clusterbox-v120-dl-
+            ${{ runner.os }}-clusterbox-2512-dl-
 
       - name: Install build dependencies
         run: |
@@ -167,6 +175,19 @@ jobs:
             echo 'CONFIG_CCACHE=y' >> .config
             echo 'CONFIG_CCACHE_DIR="/cache/ccache"' >> .config
           fi
+          # Firmware version in /etc/openwrt_release (DISTRIB_DESCRIPTION):
+          # LuCI shows it in the footer and on the status page.
+          {
+            echo 'CONFIG_IMAGEOPT=y'
+            echo 'CONFIG_VERSIONOPT=y'
+            echo "CONFIG_VERSION_CODE=\"ClusterBox ${MIXTILE_FW_VERSION}\""
+            echo 'CONFIG_VERSION_MANUFACTURER="Mixtile"'
+            echo 'CONFIG_VERSION_PRODUCT="Cluster Box BMC"'
+            # Keep the image file name without version: collect-release.sh
+            # takes it by name.
+            echo '# CONFIG_VERSION_FILENAMES is not set'
+            echo '# CONFIG_VERSION_CODE_FILENAMES is not set'
+          } >> .config
           make defconfig
           for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun; do
             grep -qx "CONFIG_PACKAGE_${p}=y" .config || { echo "CONFIG_PACKAGE_${p} is not enabled"; exit 1; }
@@ -186,6 +207,10 @@ jobs:
         # identity (/etc/mixtile-release) must name this commit.
         if: env.SELF_HOSTED == 'true'
         run: sudo make package/mixtile-release/clean
+
+      - name: Drop images of earlier builds (self-hosted)
+        if: env.SELF_HOSTED == 'true'
+        run: sudo rm -rf bin/targets
 
       - name: Build firmware
         env:
@@ -207,8 +232,8 @@ jobs:
           name: clusterbox-firmware-${{ env.MIXTILE_FW_VERSION }}
           if-no-files-found: error
           path: |
-            release/
-            extras/
+            owrt-25.12/release/
+            owrt-25.12/extras/
 
       - name: Verify the firmware image
         run: |

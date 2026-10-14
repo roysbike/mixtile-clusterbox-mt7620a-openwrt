@@ -51,25 +51,20 @@
 		};
 	};
 
-	fan:gpio-pwms {
-		compatible = "gpio-pwms";
-		pinctrl-names = "default";
+	/* Fans: software PWM on GPIO (Linux pwm-gpio), one chip per fan:
+	 * pwmchip0/pwm0 = fan1, pwmchip1/pwm0 = fan2 (fan-boot, nodectl).
+	 * The tachometer lines (gpio2 21/20) are not used.
+	 */
+	fan1: pwm-fan1 {
+		compatible = "pwm-gpio";
 		#pwm-cells = <3>;
-		status = "okay";
-	
-		fan1 {
-			label = "fan1";
-			gpios = <&gpio2 23 0>;
-			labels = "rpm1";
-			rpm,pin = <&gpio2 21 0>;
-		};
-	
-		fan2 {
-			label = "fan2";
-			gpios = <&gpio2 22 0>;
-			labels = "rpm2";
-			rpm,pin = <&gpio2 20 0>;
-		};
+		gpios = <&gpio2 23 GPIO_ACTIVE_HIGH>;
+	};
+
+	fan2: pwm-fan2 {
+		compatible = "pwm-gpio";
+		#pwm-cells = <3>;
+		gpios = <&gpio2 22 GPIO_ACTIVE_HIGH>;
 	};
 };
 
@@ -99,10 +94,20 @@
 				read-only;
 			};
 
-			factory: partition@40000 {
+			partition@40000 {
 				label = "factory";
 				reg = <0x40000 0x10000>;
 				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_factory_4: macaddr@4 {
+						reg = <0x4 0x6>;
+					};
+				};
 			};
 		};
 	};
@@ -158,16 +163,6 @@
 	gpio {
 		groups = "uartf", "wled", "rgmii2";
 		function = "gpio";
-	};
-};
-
-&factory {
-	compatible = "nvmem-cells";
-	#address-cells = <1>;
-	#size-cells = <1>;
-
-	macaddr_factory_4: macaddr@4 {
-		reg = <0x4 0x6>;
 	};
 };
 

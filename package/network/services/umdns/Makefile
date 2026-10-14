@@ -12,9 +12,9 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/mdnsd.git
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_DATE:=2024-03-04
-PKG_SOURCE_VERSION:=7c6759792502fa45ac1e38aa5644f8cf8f290894
-PKG_MIRROR_HASH:=7314ac31559b16d34d381f001037d9679c48778d2738948c8bd361aeab491c22
+PKG_SOURCE_DATE:=2026-06-16
+PKG_SOURCE_VERSION:=1b5e7bf1cec775b89f1a6068dc0b9df3593b5986
+PKG_MIRROR_HASH:=7d9ec860af2b8217f65cd4af92a61be1925ad171dee9b536c4914cc0080e3303
 
 PKG_MAINTAINER:=John Crispin <john@phrozen.org>
 PKG_LICENSE:=LGPL-2.1
@@ -27,7 +27,7 @@ define Package/umdns
   SECTION:=net
   CATEGORY:=Network
   TITLE:=OpenWrt Multicast DNS Daemon
-  DEPENDS:=+libubox +libubus +libblobmsg-json
+  DEPENDS:=+libubox +libubus +libblobmsg-json +libudebug
 endef
 
 TARGET_CFLAGS += -I$(STAGING_DIR)/usr/include
@@ -37,7 +37,12 @@ define Package/umdns/conffiles
 endef
 
 define Package/umdns/install
-	$(INSTALL_DIR) $(1)/usr/sbin $(1)/etc/init.d $(1)/etc/config
+	$(INSTALL_DIR) \
+		$(1)/usr/sbin \
+		$(1)/etc/init.d \
+		$(1)/etc/config \
+		$(1)/usr/share/ucode/cli/modules
+	$(INSTALL_DATA) ./files/mdns.uc $(1)/usr/share/ucode/cli/modules
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/umdns $(1)/usr/sbin/
 	$(INSTALL_BIN) ./files/umdns.init $(1)/etc/init.d/umdns
 	$(INSTALL_CONF) ./files/umdns.config $(1)/etc/config/umdns

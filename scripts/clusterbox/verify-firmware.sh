@@ -98,9 +98,7 @@ strings "$tun" | grep -q "^vermagic=$KERNEL_VERSION " || fail "tun.ko vermagic $
 file -b "$tun" | grep -q 'MIPS' || fail "tun.ko is not MIPS"
 grep -rqs '^tun' "$r/etc/modules.d/" || fail "tun not autoloaded"
 [ -z "$(find "$r" -name 'openmiop-ep.ko')" ] || fail "the blade (arm64) module must not be in the image"
-# Every kernel module in the image must be MIPS and built for this kernel
-# (kmods from this build, plus Mixtile's vendor miop.ko from upstream
-# custom-files, which openmiop does not use).
+# Every kernel module in the image must be MIPS and built for this kernel.
 for ko in $(find "$r/lib/modules" -name '*.ko'); do
 	file -b "$ko" | grep -q 'MIPS' || fail "${ko#$r} is not MIPS"
 	strings "$ko" | grep -q "^vermagic=$KERNEL_VERSION " || fail "${ko#$r}: $(strings "$ko" | grep '^vermagic=')"
@@ -131,12 +129,23 @@ grep -q "option repository ''" "$r/etc/config/mixtile-update" || fail "mixtile-u
 grep -q 'api.github.com' "$r/etc/config/mixtile-update" || fail "mixtile-update api"
 ok "mixtile-update backend, LuCI Firmware Update page, source $REPOSITORY/releases, channel $UPDATE_CHANNEL"
 
-# LuCI version display
-grep -q '/etc/mixtile-release' "$r/usr/share/ucode/luci/dispatcher.uc" || fail "dispatcher does not read /etc/mixtile-release"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/sysauth.ut" || fail "login page lacks the version"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/openwrt2020/footer.ut" || fail "footer lacks the version"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/bootstrap/sysauth.ut" || fail "bootstrap login lacks the version"
-ok "LuCI login page, footer and overview read /etc/mixtile-release"
+# LuCI version display: the release description carries the firmware
+# version (CONFIG_VERSION_CODE), shown by LuCI in the footer and overview.
+grep -q "^DISTRIB_DESCRIPTION=.*ClusterBox $FIRMWARE_VERSION" "$r/etc/openwrt_release" ||
+	fail "/etc/openwrt_release: $(grep DISTRIB_DESCRIPTION "$r/etc/openwrt_release")"
+ok "LuCI shows $(sed -n 's/^DISTRIB_DESCRIPTION=//p' "$r/etc/openwrt_release")"
+
+# Board drivers and what was left out on purpose
+[ -n "$(find "$r/lib/modules/$KERNEL_VERSION" -name ch343.ko)" ] || fail "ch343.ko (blade consoles) missing"
+for f in etc/init.d/fan-boot usr/bin/picocom usr/bin/sshpass; do
+	[ -e "$r/$f" ] || fail "/$f missing"
+done
+for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd usr/sbin/openvpn; do
+	[ -e "$r/$f" ] && fail "/$f should not be in the image"
+done
+[ -z "$(find "$r/lib/modules" -name 'miop.ko' -o -name 'mac80211.ko' -o -name 'cfg80211.ko')" ] ||
+	fail "vendor miop.ko or Wi-Fi modules in the image"
+ok "ch343, fan-boot, picocom, sshpass; no Wi-Fi, PPP, OpenVPN or vendor miop.ko"
 
 [ "$failed" = 0 ] || die "firmware verification failed"
 echo "firmware verified: $(basename "$image")"

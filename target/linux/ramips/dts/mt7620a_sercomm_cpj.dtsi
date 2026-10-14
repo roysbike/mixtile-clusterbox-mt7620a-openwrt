@@ -38,14 +38,12 @@
 		compatible = "gpio-leds";
 
 		status_green: led-0 {
-			label = "green:status";
 			gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_STATUS;
 		};
 
 		status_amber: led-1 {
-			label = "amber:status";
 			gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
 			color = <LED_COLOR_ID_AMBER>;
 			function = LED_FUNCTION_STATUS;
@@ -160,7 +158,7 @@
 	flash@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
-		spi-max-frequency = <70000000>;
+		spi-max-frequency = <50000000>;
 		m25p,fast-read;
 
 		partitions {
@@ -186,7 +184,7 @@
 				reg = <0x30000 0x20000>;
 			};
 
-			factory: partition@50000 {
+			partition@50000 {
 				label = "Factory";
 				reg = <0x50000 0x10000>;
 				read-only;
@@ -195,6 +193,10 @@
 					compatible = "fixed-layout";
 					#address-cells = <1>;
 					#size-cells = <1>;
+
+					eeprom_factory_0: eeprom@0 {
+						reg = <0x0 0x200>;
+					};
 
 					eeprom_factory_8000: eeprom@8000 {
 						reg = <0x8000 0x200>;
@@ -300,8 +302,6 @@
 
 /* mt7620 */
 &wmac {
-	nvmem-cells = <&macaddr_label 2>;
-	nvmem-cell-names = "mac-address";
-
-	ralink,mtd-eeprom = <&factory 0x0>;
+	nvmem-cells = <&eeprom_factory_0>, <&macaddr_label 2>;
+	nvmem-cell-names = "eeprom", "mac-address";
 };

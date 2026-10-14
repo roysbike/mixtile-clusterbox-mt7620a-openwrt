@@ -8,18 +8,21 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wolfssl
-PKG_VERSION:=5.6.4-stable
+PKG_VERSION:=5.9.1
+PKG_REAL_VERSION:=$(PKG_VERSION)-stable
 PKG_RELEASE:=1
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://github.com/wolfSSL/wolfssl/archive/v$(PKG_VERSION)
-PKG_HASH:=031691906794ff45e1e792561cf31759f5d29ac74936bc8dffb8b14f16d820b4
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_REAL_VERSION).tar.gz
+PKG_SOURCE_URL:=https://github.com/wolfSSL/wolfssl/archive/v$(PKG_REAL_VERSION)
+PKG_HASH:=d5ca7af48cd2d9a91d539e9baedeba55a0605a28d7ac8b01dc3d5254a13ca341
+
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(BUILD_VARIANT)/$(PKG_NAME)-$(PKG_REAL_VERSION)
 
 PKG_FIXUP:=libtool libtool-abiver
 PKG_INSTALL:=1
 PKG_BUILD_FLAGS:=no-mips16 lto
 PKG_BUILD_PARALLEL:=1
-PKG_LICENSE:=GPL-2.0-or-later
+PKG_LICENSE:=GPL-3.0-or-later
 PKG_LICENSE_FILES:=LICENSING COPYING
 PKG_MAINTAINER:=Eneas U de Queiroz <cotequeiroz@gmail.com>
 PKG_CPE_ID:=cpe:/a:wolfssl:wolfssl
@@ -40,7 +43,7 @@ PKG_CONFIG_DEPENDS:=\
 	CONFIG_WOLFSSL_HAS_TLSV13 \
 	CONFIG_WOLFSSL_HAS_WPAS
 
-PKG_ABI_VERSION:=$(patsubst %-stable,%,$(PKG_VERSION)).$(call version_abbrev,$(call confvar,$(PKG_CONFIG_DEPENDS)))
+PKG_ABI_VERSION:=$(PKG_VERSION).$(call version_abbrev,$(call confvar,$(PKG_CONFIG_DEPENDS)))
 
 PKG_CONFIG_DEPENDS+=\
 	CONFIG_PACKAGE_libwolfssl-benchmark \
@@ -50,6 +53,8 @@ PKG_CONFIG_DEPENDS+=\
 	CONFIG_WOLFSSL_HAS_DEVCRYPTO_FULL
 
 include $(INCLUDE_DIR)/package.mk
+
+DISABLE_NLS:=
 
 define Package/libwolfssl/Default
   SECTION:=libs

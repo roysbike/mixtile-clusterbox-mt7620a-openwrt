@@ -1,28 +1,32 @@
 include $(TOPDIR)/rules.mk
-include $(INCLUDE_DIR)/package.mk
 
 PKG_NAME:=custom-files
-PKG_VERSION:=1.0
+PKG_VERSION:=1.2
+PKG_RELEASE:=1
+PKG_LICENSE:=GPL-2.0-or-later
 
-define Package/$(PKG_NAME)
-	CATEGORY:=Custom file
-	TITLE:=custom file
+include $(INCLUDE_DIR)/package.mk
+
+define Package/custom-files
+  CATEGORY:=Custom file
+  TITLE:=Cluster Box board files (fan control)
+  PKGARCH:=all
 endef
 
-define Build/Prepare
-	mkdir -p $(PKG_BUILD_DIR)
-	echo " Build/Prepare mkdir -p $(PKG_BUILD_DIR)"
-	$(CP) ./files $(PKG_BUILD_DIR)
-	echo " Build/Prepare $(CP) ./files $(PKG_BUILD_DIR)"
+define Package/custom-files/description
+  fan-boot: sets the duty cycle of the two Cluster Box fans (pwm-gpio,
+  /sys/class/pwm/pwmchip0 and pwmchip1) from nodectl.global.fan_duty.
+  /etc/sudoers.d/mixtile: the sudo group runs commands without a password.
 endef
 
-define Build/Compile/Default
-
+define Build/Compile
 endef
-Build/Compile = $(Build/Compile/Default)
 
-define Package/$(PKG_NAME)/install
-	cp -rfp $(PKG_BUILD_DIR)/files/* $(1)/
+define Package/custom-files/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/fan-boot $(1)/etc/init.d/fan-boot
+	$(INSTALL_DIR) $(1)/etc/sudoers.d
+	install -m0440 ./files/etc/sudoers.d/mixtile $(1)/etc/sudoers.d/mixtile
 endef
 
 $(eval $(call BuildPackage,custom-files))

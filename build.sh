@@ -88,7 +88,7 @@ function build_all()
 	make -j1 V=s
 	[ -f "$TARGET_BIN" ]
 	mkdir -p output
-	cp "$TARGET_BIN" "$COMMON_DIR/output/image-release-clusterbox-openwrt23-$(date '+%Y%m%d').bin"
+	cp "$TARGET_BIN" "$COMMON_DIR/output/image-release-clusterbox-openwrt25-$(date '+%Y%m%d').bin"
 }
 
 function build_firmware()
@@ -115,7 +115,7 @@ function build_firmware()
 	fi
 	[ -f "$TARGET_BIN" ]
 	mkdir -p output
-	cp "$TARGET_BIN" "$COMMON_DIR/output/image-release-clusterbox-openwrt23-$(date '+%Y%m%d').bin"
+	cp "$TARGET_BIN" "$COMMON_DIR/output/image-release-clusterbox-openwrt25-$(date '+%Y%m%d').bin"
 }
 
 function build_kernel()

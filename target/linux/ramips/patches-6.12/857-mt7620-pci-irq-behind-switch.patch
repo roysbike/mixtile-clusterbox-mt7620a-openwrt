@@ -1,0 +1,17 @@
+From: Artem Goncharenko <roysbike@gmail.com>
+Subject: [PATCH] MIPS: pci-mt7620: map the PCIe IRQ for devices behind a switch
+
+The Cluster Box puts an ASM2824 switch behind the root port: the
+downstream devices sit on bus 2 and later, not only on bus 1.
+
+--- a/arch/mips/pci/pci-mt7620.c
++++ b/arch/mips/pci/pci-mt7620.c
+@@ -393,7 +393,7 @@ int pcibios_map_irq(const struct pci_dev
+ 		pci_config_write(dev->bus, 0, PCI_BASE_ADDRESS_0, 4,
+ 				 RALINK_PCI_MEMORY_BASE);
+ 		pci_config_read(dev->bus, 0, PCI_BASE_ADDRESS_0, 4, &val);
+-	} else if ((dev->bus->number == 1) && (slot == 0x0)) {
++	} else if ((dev->bus->number >= 1) && (slot == 0x0)) {
+ 		irq = RALINK_INT_PCIE0;
+ 	} else {
+ 		dev_err(&dev->dev, "no irq found - bus=0x%x, slot = 0x%x\n",
