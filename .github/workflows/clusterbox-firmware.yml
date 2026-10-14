@@ -178,6 +178,7 @@ jobs:
           # Firmware version in /etc/openwrt_release (DISTRIB_DESCRIPTION):
           # LuCI shows it in the footer and on the status page.
           {
+            echo 'CONFIG_IMAGEOPT=y'
             echo 'CONFIG_VERSIONOPT=y'
             echo "CONFIG_VERSION_CODE=\"ClusterBox ${MIXTILE_FW_VERSION}\""
             echo 'CONFIG_VERSION_MANUFACTURER="Mixtile"'
