@@ -117,6 +117,19 @@ done
 file -b "$r/bin/nodectl" | grep -q MIPS || fail "nodectl is not MIPS"
 ok "nodectl + luci-app-nodectl"
 
+# ClusterBox management backend, MoCI UI, Tailscale
+for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/clusterbox/confhist \
+	usr/libexec/clusterbox/wanwatch etc/init.d/clusterbox etc/config/clusterbox \
+	etc/uci-defaults/80-clusterbox-network etc/uci-defaults/81-clusterbox \
+	usr/share/rpcd/acl.d/clusterbox.json www/moci/index.html www/moci/js/core.js \
+	usr/libexec/rpcd/moci www/moci/js/addons/cluster/manifest.json www/moci/js/addons/cluster/addon.js \
+	www/cluster.html usr/sbin/tailscaled; do
+	[ -e "$r/$f" ] || fail "/$f missing"
+done
+grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"
+grep -q '"0:lan"' "$r/etc/board.d/02_network" 2>/dev/null && fail "switch defaults still have lan ports"
+ok "clusterbox backend, MoCI + ClusterBox add-on, tailscale; network defaults wan + openmiop"
+
 # updates
 for f in usr/libexec/mixtile-update etc/init.d/mixtile-update; do
 	[ -x "$r/$f" ] || fail "/$f missing"
