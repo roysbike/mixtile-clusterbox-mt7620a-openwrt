@@ -127,7 +127,8 @@ for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/cl
 	[ -e "$r/$f" ] || fail "/$f missing"
 done
 grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"
-grep -q '"0:lan"' "$r/etc/board.d/02_network" 2>/dev/null && fail "switch defaults still have lan ports"
+sed -n '/^\tcluster-box-control-V120)/,/;;/p' "$r/etc/board.d/02_network" | grep -q ':lan"' &&
+	fail "switch defaults of the Cluster Box still have lan ports"
 ok "clusterbox backend, MoCI + ClusterBox add-on, tailscale; network defaults wan + openmiop"
 
 # updates
