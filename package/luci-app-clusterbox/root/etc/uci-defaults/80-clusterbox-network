@@ -1,0 +1,165 @@
+#!/bin/sh
+# ClusterBox network layout: "wan" (1G jack, switch port 5) and "openmiop"
+# (omi0, the PCIe fabric to the blades). No LAN bridge.
+#
+# Runs on every first boot of an image, also after an upgrade that kept
+# the settings, so it only touches what the vendor firmware generated:
+# - br-lan on eth0.1 with 169.192.1.1 (switch ports 0/1, unused),
+# - eth_pci on the device "pci0", which never exists (omi0 is the netdev),
+# - a firewall zone "lan" left with nothing but the omi0 interface
+#   (references to interfaces that do not exist are dropped).
+# Anything set up by hand stays as it is.
+
+. /lib/functions.sh
+
+changed_network= changed_firewall= changed_dhcp=
+
+# Vendor LAN bridge: interface lan on br-lan (eth0.1), 169.192.1.1.
+lan_dev=$(uci -q get network.lan.device)
+lan_ip=$(uci -q get network.lan.ipaddr)
+if [ "$lan_dev" = br-lan ] && [ "${lan_ip%%/*}" = 169.192.1.1 ]; then
+	uci -q delete network.lan
+	drop_dev() {
+		local name
+		config_get name "$1" name
+		case "$name" in br-lan|eth0.1) uci -q delete "network.$1" ;; esac
+	}
+	drop_vlan() {
+		local vlan
+		config_get vlan "$1" vlan
+		[ "$vlan" = 1 ] && uci -q delete "network.$1"
+	}
+	config_load network
+	config_foreach drop_dev device
+	config_foreach drop_vlan switch_vlan
+	uci -q delete dhcp.lan && changed_dhcp=1
+	changed_network=1
+fi
+
+# The omi0 interface: name of the network section that uses it.
+omi_if=
+find_omi() {
+	local dev
+	config_get dev "$1" device
+	[ "$dev" = omi0 ] && [ -z "$omi_if" ] && omi_if=$1
+}
+config_load network
+config_foreach find_omi interface
+
+if [ -z "$omi_if" ]; then
+	if [ "$(uci -q get network.eth_pci.device)" = pci0 ]; then
+		# Vendor default: fix the device, keep the section name so the
+		# firewall and dhcp references stay valid.
+		uci -q set network.eth_pci.device=omi0
+		uci -q delete network.eth_pci.ip6assign
+		uci -q delete network.eth_pci.broadcast
+		omi_if=eth_pci
+	else
+		uci -q batch <<-EOF
+			set network.openmiop=interface
+			set network.openmiop.device=omi0
+			set network.openmiop.proto=static
+			add_list network.openmiop.ipaddr=10.20.0.1/24
+		EOF
+		omi_if=openmiop
+	fi
+	changed_network=1
+fi
+
+# The vendor "pci0" device section (only a MAC) is unused now.
+drop_pci0() {
+	local name
+	config_get name "$1" name
+	[ "$name" = pci0 ] && uci -q delete "network.$1" && changed_network=1
+}
+config_load network
+config_foreach drop_pci0 device
+
+# DNS (not DHCP) for the blades on omi0.
+dhcp_has=
+find_dhcp() {
+	local iface
+	config_get iface "$1" interface
+	[ "$iface" = "$omi_if" ] && dhcp_has=1
+}
+config_load dhcp
+config_foreach find_dhcp dhcp
+if [ -z "$dhcp_has" ]; then
+	uci -q batch <<-EOF
+		set dhcp.$omi_if=dhcp
+		set dhcp.$omi_if.interface=$omi_if
+		set dhcp.$omi_if.ignore=1
+	EOF
+	changed_dhcp=1
+fi
+
+# Firewall: one zone "openmiop" with the omi0 interface, NAT to wan.
+zone_of_omi=
+zone_lan=
+scan_zone() {
+	local name nets n keep= dropped=
+	config_get name "$1" name
+	config_get nets "$1" network
+	# Drop references to interfaces that do not exist (the removed lan,
+	# a vendor eth_pci that was never defined).
+	for n in $nets; do
+		if ! uci -q get "network.$n" >/dev/null; then
+			dropped=1
+			continue
+		fi
+		keep="$keep $n"
+	done
+	if [ -n "$dropped" ]; then
+		uci -q delete "firewall.$1.network"
+		for n in $keep; do uci -q add_list "firewall.$1.network=$n"; done
+		changed_firewall=1
+	fi
+	case " $keep " in *" $omi_if "*) zone_of_omi=$1 ;; esac
+	[ "$name" = lan ] && zone_lan=$1
+}
+config_load firewall
+config_foreach scan_zone zone
+
+rename_refs() {
+	local opt v
+	for opt in src dest; do
+		config_get v "$1" "$opt"
+		[ "$v" = lan ] && uci -q set "firewall.$1.$opt=openmiop"
+	done
+}
+
+if [ -z "$zone_of_omi" ] && [ -n "$zone_lan" ] && [ -z "$(uci -q get firewall.$zone_lan.network)" ]; then
+	# The vendor "lan" zone lost its only network: it becomes "openmiop".
+	uci -q add_list "firewall.$zone_lan.network=$omi_if"
+	zone_of_omi=$zone_lan
+	changed_firewall=1
+fi
+if [ -n "$zone_of_omi" ] && [ "$zone_of_omi" = "$zone_lan" ] &&
+   [ "$(uci -q get firewall.$zone_lan.network)" = "$omi_if" ]; then
+	uci -q set "firewall.$zone_lan.name=openmiop"
+	config_load firewall
+	config_foreach rename_refs forwarding
+	config_foreach rename_refs redirect
+	config_foreach rename_refs rule
+	config_foreach rename_refs nat
+	changed_firewall=1
+fi
+if [ -z "$zone_of_omi" ]; then
+	uci -q batch >/dev/null <<-EOF
+		add firewall zone
+		set firewall.@zone[-1].name=openmiop
+		add_list firewall.@zone[-1].network=$omi_if
+		set firewall.@zone[-1].input=ACCEPT
+		set firewall.@zone[-1].output=ACCEPT
+		set firewall.@zone[-1].forward=ACCEPT
+		add firewall forwarding
+		set firewall.@forwarding[-1].src=openmiop
+		set firewall.@forwarding[-1].dest=wan
+	EOF
+	changed_firewall=1
+fi
+
+[ -n "$changed_network" ] && uci -q commit network
+[ -n "$changed_dhcp" ] && uci -q commit dhcp
+[ -n "$changed_firewall" ] && uci -q commit firewall
+exit 0

@@ -190,8 +190,12 @@ ramips_setup_interfaces()
 		;;
 	cluster-box-control|\
 	cluster-box-control-V120)
+		# Only the 1G jack (port 5) is used. The firmware does not use
+		# ports 0/1 (10/100, no link seen), so there is no LAN bridge;
+		# the blades are reached over omi0 (interface "openmiop",
+		# config_generate).
 		ucidef_add_switch "switch0" \
-			"0:lan" "1:lan" "5:wan" "6@eth0"
+			"5:wan" "6@eth0"
 		;;
 	iodata,wn-ac1167gr|\
 	iodata,wn-ac733gr3|\
@@ -308,7 +312,6 @@ ramips_setup_macs()
 	cluster-box-control|\
 	cluster-box-control-V120)
 		wan_mac=$(mtd_get_mac_binary factory 0x10)
-		lan_mac=$(macaddr_add "$wan_mac" 1)
 		;;
 	aigale,ai-br100|\
 	asus,rt-n12p|\

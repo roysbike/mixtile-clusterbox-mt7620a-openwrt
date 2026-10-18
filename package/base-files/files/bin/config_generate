@@ -39,7 +39,6 @@ generate_bridge_vlan() {
 }
 
 generate_static_network() {
-	eth_pci_mac=$(macaddr_add "$(mtd_get_mac_binary factory 0x10)" 2)
 	uci -q batch <<-EOF
 		delete network.loopback
 		set network.loopback='interface'
@@ -50,18 +49,11 @@ generate_static_network() {
 		set network.globals='globals'
 		set network.globals.dhcp_default_duid='auto'
 
-		delete network.eth_pci
-		set network.eth_pci='interface'
-		set network.eth_pci.device='pci0'
-		set network.eth_pci.proto='static'
-		set network.eth_pci.ipaddr='10.20.0.1'
-		set network.eth_pci.netmask='255.255.255.0'
-		set network.eth_pci.broadcast='10.20.0.255'
-		set network.eth_pci.ip6assign='64'
-
-		add network device
-		set network.@device[-1].name='pci0'
-		set network.@device[-1].macaddr='$eth_pci_mac'
+		delete network.openmiop
+		set network.openmiop='interface'
+		set network.openmiop.device='omi0'
+		set network.openmiop.proto='static'
+		add_list network.openmiop.ipaddr='10.20.0.1/24'
 	EOF
 	[ -e /proc/sys/net/ipv6 ] && {
 		uci -q batch <<-EOF
