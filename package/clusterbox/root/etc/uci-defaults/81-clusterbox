@@ -78,6 +78,14 @@ if [ -x /usr/sbin/tailscaled ] && ! uci -q get network.tailscale >/dev/null; the
 	}
 fi
 
+# The images ship the mixtile user without its home directory: SSH key
+# login (~/.ssh/authorized_keys) needs it, owned by the user.
+if grep -q '^mixtile:' /etc/passwd; then
+	mkdir -p /home/mixtile
+	chown mixtile:mixtile /home/mixtile
+	chmod 755 /home/mixtile
+fi
+
 # Daily configuration snapshot.
 CRON=${CB_CRON:-/etc/crontabs/root}
 mkdir -p "${CRON%/*}"

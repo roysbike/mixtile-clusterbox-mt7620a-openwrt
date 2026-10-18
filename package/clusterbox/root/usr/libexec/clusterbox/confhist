@@ -53,6 +53,8 @@ file_list() {
 		echo /home/mixtile/.ssh/authorized_keys
 		echo /etc/dropbear/authorized_keys
 	} | while read -r f; do
+		# Runtime state, not configuration (last DHCP address).
+		case "$f" in /etc/clusterbox/*) continue ;; esac
 		[ -f "$f" ] && [ ! -L "$f" ] && echo "$f"
 	done | sort -u
 }

@@ -29,6 +29,7 @@ valid_port() {
 }
 
 # Arm the guard: restore snapshot $2 unless confirmed. Prints the token.
+# $1 (kind) must not contain spaces: the pending file is split on them.
 arm() {
 	local kind=$1 snap=$2 tok
 	tok=$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom)
@@ -216,7 +217,7 @@ admin_set() {
 	EOF
 	for z in $zl; do uci -q add_list "clusterbox.admin.zones=$z"; done
 	uci -q commit clusterbox
-	tok=$(arm "access change" "$snap")
+	tok=$(arm access "$snap")
 	# Reply first; the web server restarts with the new ports.
 	( sleep 2; /usr/libexec/clusterbox/apply admin ) </dev/null >/dev/null 2>&1 &
 	json_init
@@ -259,7 +260,10 @@ history_list() {
 	json_add_string dir "$("$HIST" dir)"
 	json_add_int keep "${keep:-50}"
 	json_add_array snapshots
-	"$HIST" list | while IFS="$(printf '\t')" read -r id time reason changed size; do
+	# A loop at the end of a pipe runs in a subshell and would lose the
+	# jshn state: read from a file instead.
+	"$HIST" list > "$RUN/list.$$"
+	while IFS="$(printf '\t')" read -r id time reason changed size; do
 		json_add_object
 		json_add_string id "$id"
 		json_add_int time "${time:-0}"
@@ -267,7 +271,8 @@ history_list() {
 		json_add_string changed "$changed"
 		json_add_int size "${size:-0}"
 		json_close_object
-	done
+	done < "$RUN/list.$$"
+	rm -f "$RUN/list.$$"
 	json_close_array
 	json_dump
 }
@@ -365,7 +370,9 @@ call)
 		json_get_vars id
 		json_init
 		json_add_array files
-		"$HIST" files "$id" 2>/dev/null | while read -r f; do json_add_string "" "$f"; done
+		"$HIST" files "$id" > "$RUN/files.$$" 2>/dev/null
+		while read -r f; do json_add_string "" "$f"; done < "$RUN/files.$$"
+		rm -f "$RUN/files.$$"
 		json_close_array
 		json_dump
 		;;
@@ -379,7 +386,7 @@ call)
 		"$HIST" files "$id" >/dev/null 2>&1 || { reply 2 "no snapshot $id"; exit 0; }
 		busy && { reply 3 "confirm the previous change first (or wait until it is rolled back)"; exit 0; }
 		snap=$("$HIST" snapshot "before restore of $id") || { reply 1 "snapshot failed"; exit 0; }
-		tok=$(arm "restore of $id" "$snap")
+		tok=$(arm "restore:$id" "$snap")
 		( sleep 2; "$HIST" restore-only "$id" ) </dev/null >/dev/null 2>&1 &
 		json_init
 		json_add_int code 0

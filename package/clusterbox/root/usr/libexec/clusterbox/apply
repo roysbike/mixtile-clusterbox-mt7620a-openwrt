@@ -243,5 +243,5 @@ for c in $CHANGED; do
 done 2>/dev/null
 case " $CHANGED " in *" firewall "*) fw4 -q reload 2>/dev/null || /etc/init.d/firewall reload ;; esac
 # Commits from the shell do not reach procd's config triggers.
-/usr/libexec/clusterbox/confhist auto "settings applied:$CHANGED" </dev/null >/dev/null 2>&1 &
+/usr/libexec/clusterbox/confhist snapshot "settings applied:$CHANGED" </dev/null >/dev/null 2>&1
 exit 0

@@ -17,7 +17,8 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	( "$HIST" snapshot boot >/dev/null 2>&1 & )
+	# Synchronous: procd ends the background children of start_service.
+	"$HIST" snapshot boot >/dev/null 2>&1
 }
 
 reload_service() {
