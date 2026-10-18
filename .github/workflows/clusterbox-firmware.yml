@@ -162,9 +162,18 @@ jobs:
                   "feeds/${name}.tmp" "package/feeds/${name}"
               fi
             done
+            # The package scan cache in tmp/ outlives a feed change: with the
+            # v25.12.6 feeds it kept bash, sudo, sshpass, pciutils and the LuCI
+            # meta packages out of the menu, and defconfig dropped them.
+            stamp=$(sha256sum feeds.conf.default | cut -d' ' -f1)
+            if [ "$(cat tmp/.feeds-stamp 2>/dev/null)" != "${stamp}" ]; then
+              echo "feeds.conf.default changed: dropping the package scan cache (tmp/)"
+              sudo rm -rf tmp
+            fi
           fi
           ./build.sh feeds_update
           ./build.sh feeds_install
+          mkdir -p tmp && sha256sum feeds.conf.default | cut -d' ' -f1 > tmp/.feeds-stamp
 
       - name: Select board config
         run: ./build.sh cluster-box-config
@@ -189,7 +198,8 @@ jobs:
             echo '# CONFIG_VERSION_CODE_FILENAMES is not set'
           } >> .config
           make defconfig
-          for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun; do
+          for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun \
+            luci luci-app-firewall sudo bash sshpass picocom pciutils; do
             grep -qx "CONFIG_PACKAGE_${p}=y" .config || { echo "CONFIG_PACKAGE_${p} is not enabled"; exit 1; }
           done
 
