@@ -612,12 +612,13 @@ define Device/cluster-box-control-V120
   # The vendor U-Boot 1.1.3 (Ralink SDK) loads the kernel uImage from the
   # eMMC to 0x80c00000 and unpacks the lzma itself to 0x80000000; the 6.12
   # kernel (9.5 MiB unpacked) boots that way (tested 2026-10-18). The
-  # initramfs kernel unpacks to 31 MiB, which would overrun the image at
-  # 0x80c00000, so it goes through the lzma-loader (uImage type none) at
-  # 40 MiB. It is for bring-up only: booted from RAM with U-Boot
-  # `mmc read` + `bootm` (U-Boot TFTP does not reach the 1G port).
+  # initramfs kernel unpacks to 63 MiB (with Tailscale), which would
+  # overrun the image at 0x80c00000, so it goes through the lzma-loader
+  # (uImage type none) at 96 MiB. It is for bring-up only: booted from
+  # RAM with U-Boot `mmc read` to 0x88000000 + `bootm` (U-Boot TFTP does
+  # not reach the 1G port).
   LOADER_TYPE := bin
-  LZMA_TEXT_START := 0x82800000
+  LZMA_TEXT_START := 0x86000000
   KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | loader-kernel | uImage none
   # The BMC boots from the SD card: the kernel at mmcblk0p1 (10 MiB from
   # sector 16), the squashfs at mmcblk0p2 (50 MiB) right after it, the
