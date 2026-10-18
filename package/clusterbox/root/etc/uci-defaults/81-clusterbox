@@ -1,0 +1,54 @@
+#!/bin/sh
+# ClusterBox settings: first boot of an image (also after an upgrade that
+# kept the settings).
+
+. /lib/functions.sh
+
+# Port forwards from wan to the blades (10.20.0.x) follow the WAN address:
+# a fixed src_dip broke them every time the BMC got another address, none
+# at all made the 6443 DNAT catch traffic that is only routed through.
+mark_redirect() {
+	local src dip auto
+	config_get src "$1" src
+	config_get dip "$1" dest_ip
+	config_get auto "$1" src_dip_auto
+	[ "$src" = wan ] && [ -z "$auto" ] || return 0
+	case "$dip" in 10.20.0.*) uci -q set "firewall.$1.src_dip_auto=1" ;; esac
+}
+config_load firewall
+config_foreach mark_redirect redirect
+uci -q commit firewall
+
+# On the first run the management settings come from the running
+# services, so an upgrade keeps the ports in use (e.g. LuCI on 8080).
+if [ -z "$(uci -q get clusterbox.admin.seeded)" ]; then
+	p=$(uci -q get uhttpd.main.listen_http | tr ' ' '\n' | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -n 1)
+	[ -n "$p" ] && uci -q set clusterbox.admin.http_port="$p"
+	p=$(uci -q get uhttpd.main.listen_https | tr ' ' '\n' | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -n 1)
+	uci -q set clusterbox.admin.https_port="${p:-0}"
+	p=$(uci -q get uhttpd.main.redirect_https)
+	[ -n "$p" ] && uci -q set clusterbox.admin.redirect_https="$p"
+	s=$(uci -q show dropbear | sed -n 's/^dropbear\.\([^.=]*\)=dropbear$/\1/p' | head -n 1)
+	if [ -n "$s" ]; then
+		p=$(uci -q get "dropbear.$s.Port")
+		[ -n "$p" ] && uci -q set clusterbox.admin.ssh_port="$p"
+		[ "$(uci -q get "dropbear.$s.PasswordAuth")" = off ] && uci -q set clusterbox.admin.ssh_password=0
+	fi
+	s=$(uci -q show ttyd | sed -n 's/^ttyd\.\([^.=]*\)=ttyd$/\1/p' | grep -vx nodectl | head -n 1)
+	p=$([ -n "$s" ] && uci -q get "ttyd.$s.port")
+	[ -n "$p" ] && uci -q set clusterbox.admin.terminal_port="$p"
+	p=$(uci -q get ttyd.nodectl.port)
+	[ -n "$p" ] && uci -q set clusterbox.admin.console_port="$p"
+	uci -q set clusterbox.admin.seeded=1
+	uci -q commit clusterbox
+fi
+
+# Daily configuration snapshot.
+CRON=${CB_CRON:-/etc/crontabs/root}
+mkdir -p "${CRON%/*}"
+grep -q 'clusterbox/confhist' "$CRON" 2>/dev/null ||
+	echo '17 3 * * * [ "$(uci -q get clusterbox.history.daily)" = 0 ] || /usr/libexec/clusterbox/confhist snapshot daily >/dev/null' >> "$CRON"
+[ -n "$CB_NORELOAD" ] && exit 0
+/etc/init.d/cron enable 2>/dev/null
+/etc/init.d/clusterbox enable
+exit 0

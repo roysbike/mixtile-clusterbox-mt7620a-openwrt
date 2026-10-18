@@ -1,0 +1,55 @@
+# ClusterBox BMC settings (System > ClusterBox). Applied by
+# /etc/init.d/clusterbox to uhttpd, dropbear, ttyd, firewall, dhcp and
+# system; edit here or in the web UI, not in those configs.
+
+# Management access. The ports are open on the firewall zones listed in
+# "zones" and rejected on all others.
+config admin 'admin'
+	option http_port '80'
+	option https_port '443'
+	option redirect_https '0'
+	option ssh_port '22'
+	option ssh_password '1'
+	# LuCI terminal (ttyd) and node consoles (ttyd instance "nodectl")
+	option terminal_port '7681'
+	option console_port '7682'
+	list zones 'wan'
+	list zones 'openmiop'
+
+# WAN: if DHCP gives no address within fallback_delay seconds, add
+# fallback_ipaddr (and a default route via fallback_gateway) so the BMC
+# stays reachable; removed again as soon as DHCP answers. Empty
+# fallback_ipaddr/fallback_gateway: the last address and gateway DHCP
+# gave (kept in /etc/clusterbox/wan-last).
+config wan 'wan'
+	option fallback '1'
+	option fallback_ipaddr ''
+	option fallback_gateway ''
+	option fallback_delay '60'
+
+# DNS for the blades (dnsmasq on omi0): names <name>.<domain> for the
+# BMC (bmc) and the nodes of /etc/config/nodectl; upstream servers
+# ("server", empty = the ones from WAN DHCP).
+config dns 'dns'
+	option enabled '1'
+	option domain 'cluster'
+	option node_records '1'
+
+# NTP server for the blades (sysntpd).
+config ntp 'ntp'
+	option serve_blades '1'
+
+# Persistent log on the eMMC overlay (rotated at size KiB), optionally
+# also to a remote syslog server.
+config log 'log'
+	option persistent '1'
+	option size '1024'
+	option remote_ip ''
+	option remote_port '514'
+	option remote_proto 'udp'
+
+# Configuration history (/overlay/config-history): a snapshot on every
+# saved change, every day and before a restore; the newest "keep" stay.
+config history 'history'
+	option keep '50'
+	option daily '1'

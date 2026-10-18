@@ -1,0 +1,176 @@
+#!/bin/sh
+# Configuration history of the ClusterBox BMC.
+#
+# A snapshot is a tar.gz of the files sysupgrade keeps (sysupgrade -l:
+# /etc/config, keys, passwd/shadow, sudoers, files from
+# /etc/sysupgrade.conf) plus a manifest (sha256 per file). A snapshot that
+# would equal the newest one is not taken. The newest clusterbox.history.keep
+# (default 50) are kept.
+#
+#   confhist snapshot [reason]   take a snapshot now, print its id
+#   confhist auto [reason]       same, after a short delay (coalesces the
+#                                commits of one "Save & Apply")
+#   confhist list                one line per snapshot: id<TAB>time<TAB>reason<TAB>changed files
+#   confhist files ID            files in the snapshot
+#   confhist show ID PATH        print PATH as stored in the snapshot
+#   confhist restore ID          take a snapshot "before restore", restore
+#                                the files of ID, reload the services; prints
+#                                the id of the new snapshot (to roll back)
+#   confhist restore-only ID     restore without the snapshot before
+#   confhist delete ID
+#   confhist dir                 print the storage directory
+
+DIR=${CONFHIST_DIR:-/overlay/config-history}
+[ -n "$CONFHIST_DIR" ] || { [ -d /overlay ] && [ -w /overlay ]; } || DIR=/etc/config-history
+
+die() { echo "confhist: $*" >&2; exit 1; }
+
+valid_id() {
+	case "$1" in
+		''|*[!0-9-]*) return 1 ;;
+	esac
+	[ -f "$DIR/$1.tar.gz" ]
+}
+
+keep() {
+	local k
+	k=$(uci -q get clusterbox.history.keep)
+	case "$k" in ''|*[!0-9]*) k=50 ;; esac
+	[ "$k" -ge 1 ] || k=1
+	echo "$k"
+}
+
+newest() {
+	ls "$DIR" 2>/dev/null | sed -n 's/\.tar\.gz$//p' | sort | tail -n 1
+}
+
+# Files to keep, one per line, existing regular files only.
+file_list() {
+	{
+		sysupgrade -l 2>/dev/null
+		# Not in the sysupgrade list on every firmware.
+		echo /etc/config/clusterbox
+		echo /home/mixtile/.ssh/authorized_keys
+		echo /etc/dropbear/authorized_keys
+	} | while read -r f; do
+		[ -f "$f" ] && [ ! -L "$f" ] && echo "$f"
+	done | sort -u
+}
+
+prune() {
+	local n k
+	k=$(keep)
+	n=$(ls "$DIR" | grep -c '\.tar\.gz$')
+	[ "$n" -gt "$k" ] || return 0
+	ls "$DIR" | sed -n 's/\.tar\.gz$//p' | sort | head -n $((n - k)) | while read -r id; do
+		rm -f "$DIR/$id.tar.gz" "$DIR/$id.manifest" "$DIR/$id.info"
+	done
+}
+
+snapshot() {
+	local reason="${1:-manual}" tmp id prev changed n
+
+	mkdir -p "$DIR" && chmod 700 "$DIR"
+	tmp="$DIR/.new.$$"
+	file_list > "$tmp.files"
+	[ -s "$tmp.files" ] || { rm -f "$tmp.files"; die "no files to back up"; }
+	xargs sha256sum < "$tmp.files" 2>/dev/null | awk '{ print $1 "  " $2 }' > "$tmp.manifest"
+
+	prev=$(newest)
+	if [ -n "$prev" ] && cmp -s "$tmp.manifest" "$DIR/$prev.manifest"; then
+		rm -f "$tmp.files" "$tmp.manifest"
+		echo "$prev"
+		return 0
+	fi
+
+	id=$(date +%Y%m%d-%H%M%S)
+	n=1
+	while [ -e "$DIR/$id.tar.gz" ]; do
+		id=$(date +%Y%m%d-%H%M%S)-$n
+		n=$((n + 1))
+	done
+
+	sed 's|^/||' "$tmp.files" | tar -czf "$tmp.tar.gz" -C / -T - 2>/dev/null ||
+		{ rm -f "$tmp".*; die "tar failed"; }
+
+	# Changed files against the previous snapshot (added, removed, edited).
+	if [ -n "$prev" ]; then
+		changed=$(awk 'NR == FNR { a[$2] = $1; next }
+			{ if (!($2 in a) || a[$2] != $1) print $2; delete a[$2] }
+			END { for (f in a) print f }' "$DIR/$prev.manifest" "$tmp.manifest" | sort | tr '\n' ' ')
+	else
+		changed="(first snapshot)"
+	fi
+
+	mv "$tmp.tar.gz" "$DIR/$id.tar.gz"
+	mv "$tmp.manifest" "$DIR/$id.manifest"
+	rm -f "$tmp.files"
+	{
+		echo "time=$(date +%s)"
+		echo "reason=$(echo "$reason" | tr -d '\n\t' | cut -c1-120)"
+		echo "changed=$changed"
+	} > "$DIR/$id.info"
+	chmod 600 "$DIR/$id".*
+	prune
+	echo "$id"
+}
+
+info_get() {
+	sed -n "s/^$2=//p" "$DIR/$1.info" 2>/dev/null
+}
+
+locked() {
+	mkdir -p "$DIR"
+	exec 9>"$DIR/.lock"
+	flock 9
+	"$@"
+}
+
+case "$1" in
+	snapshot)
+		locked snapshot "$2"
+		;;
+	auto)
+		# procd fires one trigger per committed config; wait for the rest.
+		sleep 5
+		locked snapshot "${2:-change}" >/dev/null
+		;;
+	list)
+		ls "$DIR" 2>/dev/null | sed -n 's/\.tar\.gz$//p' | sort -r | while read -r id; do
+			printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$(info_get "$id" time)" \
+				"$(info_get "$id" reason)" "$(info_get "$id" changed)" \
+				"$(wc -c < "$DIR/$id.tar.gz")"
+		done
+		;;
+	files)
+		valid_id "$2" || die "no snapshot $2"
+		awk '{ print $2 }' "$DIR/$2.manifest"
+		;;
+	show)
+		valid_id "$2" || die "no snapshot $2"
+		grep -qx "[0-9a-f]*  $3" "$DIR/$2.manifest" || die "$3 not in snapshot $2"
+		tar -xzOf "$DIR/$2.tar.gz" "${3#/}"
+		;;
+	restore|restore-only)
+		valid_id "$2" || die "no snapshot $2"
+		[ "$1" = restore ] && { before=$(locked snapshot "before restore of $2") || exit 1; }
+		# Files that did not exist at the time of the snapshot (e.g. the
+		# config of a package installed later) are left alone.
+		tar -xzf "$DIR/$2.tar.gz" -C / || die "restore of $2 failed"
+		logger -t clusterbox "configuration restored from snapshot $2"
+		reload_config
+		/etc/init.d/clusterbox reload 2>/dev/null
+		[ -n "$before" ] && echo "$before"
+		;;
+	delete)
+		valid_id "$2" || die "no snapshot $2"
+		rm -f "$DIR/$2.tar.gz" "$DIR/$2.manifest" "$DIR/$2.info"
+		;;
+	dir)
+		echo "$DIR"
+		;;
+	*)
+		sed -n '2,/^$/s/^# \{0,1\}//p' "$0"
+		exit 1
+		;;
+esac

@@ -1,0 +1,247 @@
+#!/bin/sh
+# Apply /etc/config/clusterbox to the service configs.
+#   apply [all|admin|dns|ntp|log|forwards]...
+# Only options that differ are written; only services whose config changed
+# are restarted. Run by /etc/init.d/clusterbox (start/reload) and the wan
+# hotplug script (forwards).
+
+. /lib/functions.sh
+. /lib/functions/network.sh
+
+CHANGED=
+FALLBACK_STATE=/var/run/clusterbox/wan-fallback
+
+mark() {
+	case " $CHANGED " in *" $1 "*) ;; *) CHANGED="$CHANGED $1" ;; esac
+}
+
+uset() {
+	[ "$(uci -q get "$1")" = "$2" ] && return 0
+	uci -q set "$1=$2" && mark "${1%%.*}"
+}
+
+udel() {
+	uci -q get "$1" >/dev/null || return 0
+	uci -q delete "$1" && mark "${1%%.*}"
+}
+
+# ulist KEY VALUE... : make the list KEY exactly VALUE...
+ulist() {
+	local key=$1 v
+	shift
+	[ "$(uci -q get "$key")" = "$*" ] && return 0
+	uci -q delete "$key"
+	for v in "$@"; do uci -q add_list "$key=$v"; done
+	mark "${key%%.*}"
+}
+
+cb() {
+	local v
+	v=$(uci -q get "clusterbox.$1.$2")
+	echo "${v:-$3}"
+}
+
+port() {
+	case "$1" in ''|*[!0-9]*) echo "$2" ;; *) [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && echo "$1" || echo "$2" ;; esac
+}
+
+# Current WAN address: from DHCP/static, else the fallback one.
+wan_ip() {
+	local ip
+	network_flush_cache
+	network_get_ipaddr ip wan
+	[ -z "$ip" ] && [ -f "$FALLBACK_STATE" ] && ip=$(cut -d/ -f1 "$FALLBACK_STATE")
+	echo "$ip"
+}
+
+apply_admin() {
+	local http https ssh term cons redir pw zones z s ports before after sec
+
+	http=$(port "$(cb admin http_port)" 80)
+	https=$(cb admin https_port 443)
+	case "$https" in ''|*[!0-9]*) https=0 ;; esac
+	[ "$https" -le 65535 ] || https=0
+	ssh=$(port "$(cb admin ssh_port)" 22)
+	term=$(port "$(cb admin terminal_port)" 7681)
+	cons=$(port "$(cb admin console_port)" 7682)
+	redir=$(cb admin redirect_https 0)
+	pw=$(cb admin ssh_password 1)
+
+	ulist uhttpd.main.listen_http "0.0.0.0:$http" "[::]:$http"
+	if [ "$https" -gt 0 ]; then
+		ulist uhttpd.main.listen_https "0.0.0.0:$https" "[::]:$https"
+		uset uhttpd.main.redirect_https "$redir"
+	else
+		udel uhttpd.main.listen_https
+		uset uhttpd.main.redirect_https 0
+	fi
+
+	sec=$(uci -q show dropbear | sed -n 's/^dropbear\.\([^.=]*\)=dropbear$/\1/p' | head -n 1)
+	if [ -n "$sec" ]; then
+		uset "dropbear.$sec.Port" "$ssh"
+		[ "$pw" = 1 ] && pw=on || pw=off
+		uset "dropbear.$sec.PasswordAuth" "$pw"
+		uset "dropbear.$sec.RootPasswordAuth" "$pw"
+	fi
+
+	# LuCI terminal: the ttyd instance that is not the node console one.
+	sec=$(uci -q show ttyd | sed -n 's/^ttyd\.\([^.=]*\)=ttyd$/\1/p' | grep -vx nodectl | head -n 1)
+	[ -n "$sec" ] && uset "ttyd.$sec.port" "$term"
+	uci -q get ttyd.nodectl >/dev/null && uset ttyd.nodectl.port "$cons"
+
+	# Firewall: reject the management ports on the zones not listed.
+	zones=$(uci -q get clusterbox.admin.zones)
+	ports="$http $ssh $term $cons"
+	[ "$https" -gt 0 ] && ports="$http $https $ssh $term $cons"
+	before=$(uci -q show firewall | grep '^firewall\.cb_admin_')
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\(cb_admin_[^.=]*\)=rule$/\1/p'); do
+		uci -q delete "firewall.$s"
+	done
+	if [ -n "$zones" ]; then
+		for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+			z=$(uci -q get "firewall.$s.name")
+			case " $zones " in *" $z "*) continue ;; esac
+			uci -q batch <<-EOF
+				set firewall.cb_admin_$z=rule
+				set firewall.cb_admin_$z.name='ClusterBox: no management from $z'
+				set firewall.cb_admin_$z.src='$z'
+				set firewall.cb_admin_$z.proto='tcp'
+				set firewall.cb_admin_$z.dest_port='$ports'
+				set firewall.cb_admin_$z.target='REJECT'
+				reorder firewall.cb_admin_$z=1
+			EOF
+		done
+	fi
+	after=$(uci -q show firewall | grep '^firewall\.cb_admin_')
+	[ "$before" = "$after" ] || mark firewall
+}
+
+apply_dns() {
+	local en domain servers recs d before after s n name ip nlist
+
+	en=$(cb dns enabled 1)
+	domain=$(cb dns domain cluster)
+	case "$domain" in ''|*[!A-Za-z0-9.-]*) domain=cluster ;; esac
+	servers=$(uci -q get clusterbox.dns.server)
+	recs=$(cb dns node_records 1)
+	d=dhcp.@dnsmasq[0]
+	uci -q get "$d" >/dev/null || return 0
+
+	uset "$d.domain" "$domain"
+	uset "$d.local" "/$domain/"
+	if [ -n "$servers" ]; then
+		ulist "$d.server" $servers
+		uset "$d.noresolv" 1
+	else
+		udel "$d.server"
+		udel "$d.noresolv"
+	fi
+
+	nlist=$(uci -q get "$d.notinterface" | tr ' ' '\n' | grep -vx omi0 | tr '\n' ' ')
+	[ "$en" = 1 ] || nlist="$nlist omi0"
+	ulist "$d.notinterface" $nlist
+
+	before=$(uci -q show dhcp | grep '^dhcp\.cb_dns_')
+	for s in $(uci -q show dhcp | sed -n 's/^dhcp\.\(cb_dns_[^.=]*\)=domain$/\1/p'); do
+		uci -q delete "dhcp.$s"
+	done
+	if [ "$en" = 1 ] && [ "$recs" = 1 ]; then
+		uci -q batch <<-EOF
+			set dhcp.cb_dns_bmc=domain
+			set dhcp.cb_dns_bmc.name='bmc'
+			set dhcp.cb_dns_bmc.ip='10.20.0.1'
+		EOF
+		for n in 1 2 3 4; do
+			ip=$(uci -q get "nodectl.node$n.ipaddr")
+			[ -n "$ip" ] || continue
+			name=$(uci -q get "nodectl.node$n.name")
+			name=$(echo "${name:-blade$n}" | tr -c 'A-Za-z0-9-\n' '-')
+			uci -q batch <<-EOF
+				set dhcp.cb_dns_node$n=domain
+				set dhcp.cb_dns_node$n.name='$name'
+				set dhcp.cb_dns_node$n.ip='$ip'
+			EOF
+			if [ "$name" != "blade$n" ]; then
+				uci -q batch <<-EOF
+					set dhcp.cb_dns_slot$n=domain
+					set dhcp.cb_dns_slot$n.name='blade$n'
+					set dhcp.cb_dns_slot$n.ip='$ip'
+				EOF
+			fi
+		done
+	fi
+	after=$(uci -q show dhcp | grep '^dhcp\.cb_dns_')
+	[ "$before" = "$after" ] || mark dhcp
+}
+
+apply_ntp() {
+	# chrony, when installed and enabled, serves time itself.
+	[ -x /etc/init.d/chronyd ] && /etc/init.d/chronyd enabled && return 0
+	uset system.ntp.enable_server "$(cb ntp serve_blades 1)"
+}
+
+apply_log() {
+	local s ip
+	s=$(uci -q show system | sed -n 's/^system\.\([^.=]*\)=system$/\1/p' | head -n 1)
+	[ -n "$s" ] || return 0
+	if [ "$(cb log persistent 1)" = 1 ] && grep -q ' /overlay ' /proc/mounts; then
+		uset "system.$s.log_file" /overlay/log/messages
+		uset "system.$s.log_size" "$(port "$(cb log size)" 1024)"
+	else
+		udel "system.$s.log_file"
+		udel "system.$s.log_size"
+	fi
+	ip=$(cb log remote_ip)
+	if [ -n "$ip" ]; then
+		uset "system.$s.log_ip" "$ip"
+		uset "system.$s.log_port" "$(port "$(cb log remote_port)" 514)"
+		uset "system.$s.log_proto" "$(cb log remote_proto udp)"
+	else
+		udel "system.$s.log_ip"
+		udel "system.$s.log_port"
+		udel "system.$s.log_proto"
+	fi
+}
+
+# Port forwards to the cluster only match traffic to the BMC's own WAN
+# address (src_dip); without it a DNAT on e.g. 6443 also catches traffic
+# that is only routed through the BMC. Redirects with src_dip_auto=1 follow
+# the WAN address.
+apply_forwards() {
+	local ip s
+	ip=$(wan_ip)
+	[ -n "$ip" ] || return 0
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=redirect$/\1/p'); do
+		[ "$(uci -q get "firewall.$s.src_dip_auto")" = 1 ] || continue
+		uset "firewall.$s.src_dip" "$ip"
+	done
+}
+
+[ $# -gt 0 ] || set -- all
+for what in "$@"; do
+	case "$what" in
+		all) apply_admin; apply_dns; apply_ntp; apply_log; apply_forwards ;;
+		admin|dns|ntp|log|forwards) "apply_$what" ;;
+		*) echo "apply: unknown part $what" >&2; exit 2 ;;
+	esac
+done
+
+[ -n "$CHANGED" ] || exit 0
+for c in $CHANGED; do uci -q commit "$c"; done
+logger -t clusterbox "applied:$CHANGED"
+# Tests: commit only, no service restarts.
+[ -n "$CB_NORELOAD" ] && exit 0
+
+for c in $CHANGED; do
+	case "$c" in
+		uhttpd) /etc/init.d/uhttpd restart ;;
+		dropbear) /etc/init.d/dropbear restart ;;
+		ttyd) /etc/init.d/ttyd restart ;;
+		dhcp) /etc/init.d/dnsmasq restart ;;
+		system) /etc/init.d/sysntpd restart; /etc/init.d/log restart ;;
+	esac
+done 2>/dev/null
+case " $CHANGED " in *" firewall "*) fw4 -q reload 2>/dev/null || /etc/init.d/firewall reload ;; esac
+# Commits from the shell do not reach procd's config triggers.
+/usr/libexec/clusterbox/confhist auto "settings applied:$CHANGED" </dev/null >/dev/null 2>&1 &
+exit 0

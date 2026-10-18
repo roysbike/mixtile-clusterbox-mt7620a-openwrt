@@ -1,0 +1,99 @@
+#!/bin/sh
+# WAN fallback address (clusterbox.wan): when the wan interface has had
+# no IPv4 address for fallback_delay seconds, put fallback_ipaddr on its
+# device (and a default route via fallback_gateway, if set); take it
+# away as soon as DHCP (or a static setup) provides an address. Run as a
+# procd instance by /etc/init.d/clusterbox.
+
+. /lib/functions/network.sh
+
+STATE=/var/run/clusterbox/wan-fallback
+LAST=/etc/clusterbox/wan-last
+mkdir -p "${STATE%/*}" "${LAST%/*}"
+
+cfg() {
+	local v
+	v=$(uci -q get "clusterbox.wan.$1")
+	echo "${v:-$2}"
+}
+
+wan_dev() {
+	local d
+	network_get_device d wan
+	[ -n "$d" ] || d=$(uci -q get network.wan.device)
+	echo "$d"
+}
+
+remove_fallback() {
+	[ -f "$STATE" ] || return 0
+	read -r addr dev gw < "$STATE"
+	[ -n "$gw" ] && ip route del default via "$gw" dev "$dev" metric 900 2>/dev/null
+	ip addr del "$addr" dev "$dev" 2>/dev/null
+	rm -f "$STATE"
+	logger -t clusterbox "wan: DHCP address back, fallback $addr removed"
+	/usr/libexec/clusterbox/apply forwards
+}
+
+add_fallback() {
+	local addr=$1 gw=$2 dev
+	dev=$(wan_dev)
+	[ -n "$dev" ] || return 0
+	ip link set "$dev" up 2>/dev/null
+	ip addr replace "$addr" dev "$dev" || return 0
+	if [ -n "$gw" ] && ! ip route show default | grep -q .; then
+		ip route replace default via "$gw" dev "$dev" metric 900 2>/dev/null || gw=
+	else
+		gw=
+	fi
+	echo "$addr $dev $gw" > "$STATE"
+	logger -t clusterbox "wan: no address for $(cfg fallback_delay 60) s, fallback $addr on $dev"
+	/usr/libexec/clusterbox/apply forwards
+}
+
+missing=0
+while :; do
+	if [ "$(cfg fallback 1)" != 1 ]; then
+		remove_fallback
+		missing=0
+		sleep 30
+		continue
+	fi
+	network_flush_cache
+	network_get_ipaddr ip wan
+	if [ -n "$ip" ] && [ "$(network_get_protocol p wan; echo "$p")" = dhcp ]; then
+		# Remember the last DHCP address as the default fallback.
+		network_get_subnet sub wan
+		network_get_gateway gw4 wan
+		[ "$(cat "$LAST" 2>/dev/null)" = "$sub $gw4" ] || echo "$sub $gw4" > "$LAST"
+	fi
+	addr=$(cfg fallback_ipaddr)
+	gw=$(cfg fallback_gateway)
+	if [ -z "$addr" ] && [ -s "$LAST" ]; then
+		read -r addr lgw < "$LAST"
+		[ -n "$gw" ] || gw=$lgw
+	fi
+	if [ -z "$addr" ]; then
+		# Nothing known yet: keep waiting for DHCP.
+		sleep 10
+		continue
+	fi
+	case "$addr" in */*) ;; *) addr=$addr/24 ;; esac
+	if [ -n "$ip" ]; then
+		if [ -f "$STATE" ] && [ "$(cut -d/ -f1 "$STATE")" = "$ip" ]; then
+			# DHCP handed out the fallback address itself: netifd owns
+			# it now; drop only our route and the state.
+			read -r _ dev gw < "$STATE"
+			[ -n "$gw" ] && ip route del default via "$gw" dev "$dev" metric 900 2>/dev/null
+			rm -f "$STATE"
+		else
+			remove_fallback
+		fi
+		missing=0
+	elif [ ! -f "$STATE" ]; then
+		missing=$((missing + 10))
+		delay=$(cfg fallback_delay 60)
+		case "$delay" in ''|*[!0-9]*) delay=60 ;; esac
+		[ "$missing" -ge "$delay" ] && add_fallback "$addr" "$gw"
+	fi
+	sleep 10
+done

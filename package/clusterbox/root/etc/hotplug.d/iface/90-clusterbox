@@ -1,0 +1,7 @@
+#!/bin/sh
+# Port forwards to the cluster follow the WAN address (src_dip_auto).
+[ "$INTERFACE" = wan ] || exit 0
+case "$ACTION" in
+	ifup|ifupdate) /usr/libexec/clusterbox/apply forwards ;;
+esac
+exit 0

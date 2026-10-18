@@ -1,0 +1,360 @@
+#!/bin/sh
+# rpcd backend of the ClusterBox web UI (ubus object "clusterbox").
+#
+# Changes that can cut off the browser (management access, restoring a
+# configuration snapshot) are applied with a guard: a snapshot is taken
+# first, and unless the browser calls "confirm" with the returned token
+# within GUARD seconds, that snapshot is restored.
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions/network.sh
+
+HIST=/usr/libexec/clusterbox/confhist
+RUN=/var/run/clusterbox
+PENDING=$RUN/pending
+GUARD=120
+
+mkdir -p "$RUN"
+
+reply() {
+	json_init
+	json_add_int code "$1"
+	json_add_string message "$2"
+	json_dump
+}
+
+valid_port() {
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+# Arm the guard: restore snapshot $2 unless confirmed. Prints the token.
+arm() {
+	local kind=$1 snap=$2 tok
+	tok=$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom)
+	echo "$tok $(( $(date +%s) + GUARD )) $kind $snap" > "$PENDING"
+	(
+		sleep "$GUARD"
+		read -r t _ k s < "$PENDING" 2>/dev/null || exit 0
+		[ "$t" = "$tok" ] || exit 0
+		rm -f "$PENDING"
+		logger -t clusterbox "$k not confirmed within $GUARD s, restoring snapshot $s"
+		"$HIST" restore-only "$s" >/dev/null 2>&1
+	) </dev/null >/dev/null 2>&1 &
+	echo "$tok"
+}
+
+# A guarded change is waiting for its confirmation.
+busy() {
+	local d
+	read -r _ d _ < "$PENDING" 2>/dev/null || return 1
+	[ "$d" -gt "$(date +%s)" ]
+}
+
+# Cached probe: run "$2" at most every $3 seconds in the background,
+# return the last result (file $RUN/$1).
+cached() {
+	local f="$RUN/$1" age=999999
+	[ -f "$f" ] && age=$(( $(date +%s) - $(date -r "$f" +%s 2>/dev/null || echo 0) ))
+	if [ "$age" -ge "$3" ] && mkdir "$f.lock" 2>/dev/null; then
+		( eval "$2" > "$f.new" 2>/dev/null; mv "$f.new" "$f"; rmdir "$f.lock" ) </dev/null >/dev/null 2>&1 &
+	fi
+	cat "$f" 2>/dev/null
+}
+
+sysfs_link() {
+	local d=/sys/bus/pci/devices/$1
+	[ -r "$d/current_link_speed" ] || return 0
+	echo "$(cat "$d/current_link_speed" 2>/dev/null)|$(cat "$d/current_link_width" 2>/dev/null)"
+}
+
+netdev_bytes() {
+	echo "$(cat /sys/class/net/$1/statistics/rx_bytes 2>/dev/null || echo 0) $(cat /sys/class/net/$1/statistics/tx_bytes 2>/dev/null || echo 0)"
+}
+
+topology() {
+	local ip gw dev up proto sub fb link rx tx inet ts ts_ip sw slink nodes base
+
+	network_flush_cache
+	network_get_ipaddr ip wan
+	network_get_subnet sub wan
+	network_get_gateway gw wan
+	network_get_device dev wan
+	network_get_protocol proto wan
+	network_is_up wan && up=1 || up=0
+	[ -n "$dev" ] || dev=$(uci -q get network.wan.device)
+	fb=
+	[ -f "$RUN/wan-fallback" ] && read -r fb _ < "$RUN/wan-fallback"
+	link=$(swconfig dev switch0 port 5 get link 2>/dev/null)
+
+	json_init
+	json_add_object bmc
+	json_add_string hostname "$(uci -q get system.@system[0].hostname)"
+	json_add_int uptime "$(cut -d. -f1 /proc/uptime)"
+	json_add_string load "$(cut -d' ' -f1-3 /proc/loadavg)"
+	json_add_int mem_total_kb "$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+	json_add_int mem_avail_kb "$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
+	json_add_string firmware "$(sed -n 's/^FIRMWARE_VERSION="\(.*\)"/\1/p' /etc/mixtile-release 2>/dev/null)"
+	json_close_object
+
+	json_add_object wan
+	json_add_boolean up "$up"
+	json_add_string proto "$proto"
+	json_add_string device "$dev"
+	json_add_string ipaddr "${sub:-$ip}"
+	json_add_string gateway "$gw"
+	json_add_string fallback "$fb"
+	json_add_string link "$link"
+	read -r rx tx <<-EOF
+		$(netdev_bytes "$dev")
+	EOF
+	json_add_double rx_bytes "$rx"
+	json_add_double tx_bytes "$tx"
+	json_close_object
+
+	inet=$(cached inet 'ping -c 1 -W 2 1.1.1.1 2>/dev/null | sed -n "s/.*time=\([0-9.]*\).*/\1/p"' 30)
+	json_add_object internet
+	json_add_boolean up "$([ -n "$inet" ] && echo 1 || echo 0)"
+	json_add_string rtt_ms "$inet"
+	json_close_object
+
+	json_add_object tailscale
+	if [ -x /usr/sbin/tailscale ]; then
+		ts=$(cached tsstate 'tailscale status --json --peers=false 2>/dev/null | jsonfilter -e "@.BackendState"' 30)
+		ts_ip=$(cached tsip 'tailscale ip -4 2>/dev/null | head -n 1' 30)
+		json_add_boolean installed 1
+		json_add_string state "$ts"
+		json_add_string ipaddr "$ts_ip"
+	else
+		json_add_boolean installed 0
+	fi
+	json_close_object
+
+	# PCIe: MT7620A root port -> ASM2824 (01:00.0 upstream) -> 02:xx.0 -> blades.
+	sw=$(cat /sys/bus/pci/devices/0000:01:00.0/vendor 2>/dev/null):$(cat /sys/bus/pci/devices/0000:01:00.0/device 2>/dev/null)
+	slink=$(sysfs_link 0000:01:00.0)
+	json_add_object pcie
+	json_add_boolean switch "$([ "$sw" = 0x1b21:0x2824 ] && echo 1 || echo 0)"
+	json_add_string switch_id "$sw"
+	json_add_string uplink "$slink"
+	case "$(cat /sys/class/net/omi0/operstate 2>/dev/null)" in
+		up|unknown) json_add_boolean omi0 1 ;;
+		*) json_add_boolean omi0 0 ;;
+	esac
+	json_add_string omi_driver "$([ -d /sys/module/omi_rc ] && echo omi-rc || { pidof openmiop-rc >/dev/null && echo openmiop-rc; })"
+	read -r rx tx <<-EOF
+		$(netdev_bytes omi0)
+	EOF
+	json_add_double rx_bytes "$rx"
+	json_add_double tx_bytes "$tx"
+	json_close_object
+
+	nodes=$(/bin/nodectl status --json 2>/dev/null)
+	[ -n "$nodes" ] || nodes='{"nodes":[]}'
+	base=$(json_dump)
+	# nodectl prints {"nodes":[...]}: splice its array into our object.
+	printf '%s, "cluster": %s }\n' "${base%\}}" "$nodes"
+}
+
+admin_get() {
+	local z s
+	json_init
+	for z in http_port https_port redirect_https ssh_port ssh_password terminal_port console_port; do
+		json_add_string "$z" "$(uci -q get clusterbox.admin.$z)"
+	done
+	json_add_array zones
+	for z in $(uci -q get clusterbox.admin.zones); do json_add_string "" "$z"; done
+	json_close_array
+	json_add_array all_zones
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+		json_add_string "" "$(uci -q get firewall.$s.name)"
+	done
+	json_close_array
+	json_dump
+}
+
+admin_set() {
+	local http_port https_port redirect_https ssh_port ssh_password terminal_port console_port
+	local p seen z snap tok zl=
+
+	json_get_vars http_port https_port redirect_https ssh_port ssh_password terminal_port console_port
+	for p in "$http_port" "$ssh_port" "$terminal_port" "$console_port"; do
+		valid_port "$p" || { reply 2 "invalid port: $p"; return; }
+	done
+	[ "${https_port:-0}" = 0 ] || valid_port "$https_port" || { reply 2 "invalid HTTPS port"; return; }
+	seen=" "
+	for p in $http_port ${https_port:-0} $ssh_port $terminal_port $console_port; do
+		[ "$p" = 0 ] && continue
+		case "$seen" in *" $p "*) reply 2 "port $p is used twice"; return ;; esac
+		seen="$seen$p "
+	done
+	if json_is_a zones array; then
+		json_select zones
+		local i=1
+		while json_is_a "$i" string; do
+			json_get_var z "$i"
+			case "$z" in ''|*[!A-Za-z0-9_-]*) json_select ..; reply 2 "invalid zone name"; return ;; esac
+			uci -q show firewall | grep -q "\.name='$z'$" || { json_select ..; reply 2 "no firewall zone $z"; return; }
+			zl="$zl $z"
+			i=$((i + 1))
+		done
+		json_select ..
+	fi
+	[ -n "$zl" ] || { reply 2 "management must stay reachable from at least one zone"; return; }
+	busy && { reply 3 "confirm the previous change first (or wait until it is rolled back)"; return; }
+
+	snap=$("$HIST" snapshot "before access change") || { reply 1 "snapshot failed"; return; }
+	uci -q batch <<-EOF
+		set clusterbox.admin.http_port='$http_port'
+		set clusterbox.admin.https_port='${https_port:-0}'
+		set clusterbox.admin.redirect_https='$([ "$redirect_https" = 1 ] && echo 1 || echo 0)'
+		set clusterbox.admin.ssh_port='$ssh_port'
+		set clusterbox.admin.ssh_password='$([ "$ssh_password" = 0 ] && echo 0 || echo 1)'
+		set clusterbox.admin.terminal_port='$terminal_port'
+		set clusterbox.admin.console_port='$console_port'
+		delete clusterbox.admin.zones
+	EOF
+	for z in $zl; do uci -q add_list "clusterbox.admin.zones=$z"; done
+	uci -q commit clusterbox
+	tok=$(arm "access change" "$snap")
+	# Reply first; the web server restarts with the new ports.
+	( sleep 2; /usr/libexec/clusterbox/apply admin ) </dev/null >/dev/null 2>&1 &
+	json_init
+	json_add_int code 0
+	json_add_string token "$tok"
+	json_add_int timeout "$GUARD"
+	json_dump
+}
+
+pending() {
+	local t d k s
+	json_init
+	if read -r t d k s < "$PENDING" 2>/dev/null; then
+		json_add_boolean pending 1
+		json_add_string kind "$k"
+		json_add_int remaining $(( d - $(date +%s) ))
+	else
+		json_add_boolean pending 0
+	fi
+	json_dump
+}
+
+confirm() {
+	local token t
+	json_get_vars token
+	read -r t _ < "$PENDING" 2>/dev/null
+	if [ -n "$t" ] && [ "$t" = "$token" ]; then
+		rm -f "$PENDING"
+		logger -t clusterbox "change confirmed"
+		reply 0 "confirmed"
+	else
+		reply 2 "nothing to confirm"
+	fi
+}
+
+history_list() {
+	local id time reason changed size keep
+	keep=$(uci -q get clusterbox.history.keep)
+	json_init
+	json_add_string dir "$("$HIST" dir)"
+	json_add_int keep "${keep:-50}"
+	json_add_array snapshots
+	"$HIST" list | while IFS="$(printf '\t')" read -r id time reason changed size; do
+		json_add_object
+		json_add_string id "$id"
+		json_add_int time "${time:-0}"
+		json_add_string reason "$reason"
+		json_add_string changed "$changed"
+		json_add_int size "${size:-0}"
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+history_file() {
+	local id path snap cur
+	json_get_vars id path
+	case "$path" in /*) ;; *) reply 2 "invalid path"; return ;; esac
+	"$HIST" files "$id" 2>/dev/null | grep -qx "$path" || { reply 2 "$path not in snapshot $id"; return; }
+	json_init
+	json_add_string path "$path"
+	json_add_string snapshot "$("$HIST" show "$id" "$path" 2>/dev/null | head -c 262144)"
+	if [ -f "$path" ]; then
+		json_add_boolean exists 1
+		json_add_string current "$(head -c 262144 "$path")"
+	else
+		json_add_boolean exists 0
+	fi
+	json_dump
+}
+
+case "$1" in
+list)
+	cat <<-'EOF'
+	{
+		"topology": {},
+		"admin_get": {},
+		"admin_set": { "http_port": "80", "https_port": "443", "redirect_https": "0", "ssh_port": "22", "ssh_password": "1", "terminal_port": "7681", "console_port": "7682", "zones": [] },
+		"pending": {},
+		"confirm": { "token": "" },
+		"history_list": {},
+		"history_files": { "id": "" },
+		"history_file": { "id": "", "path": "" },
+		"history_snapshot": { "reason": "" },
+		"history_restore": { "id": "" },
+		"history_delete": { "id": "" },
+		"apply": {}
+	}
+	EOF
+	;;
+call)
+	read -r input
+	[ -n "$input" ] || input='{}'
+	json_load "$input"
+	case "$2" in
+	topology) topology ;;
+	admin_get) admin_get ;;
+	admin_set) admin_set ;;
+	pending) pending ;;
+	confirm) confirm ;;
+	history_list) history_list ;;
+	history_files)
+		json_get_vars id
+		json_init
+		json_add_array files
+		"$HIST" files "$id" 2>/dev/null | while read -r f; do json_add_string "" "$f"; done
+		json_close_array
+		json_dump
+		;;
+	history_file) history_file ;;
+	history_snapshot)
+		json_get_vars reason
+		id=$("$HIST" snapshot "${reason:-manual}" 2>&1) && reply 0 "$id" || reply 1 "$id"
+		;;
+	history_restore)
+		json_get_vars id
+		"$HIST" files "$id" >/dev/null 2>&1 || { reply 2 "no snapshot $id"; exit 0; }
+		busy && { reply 3 "confirm the previous change first (or wait until it is rolled back)"; exit 0; }
+		snap=$("$HIST" snapshot "before restore of $id") || { reply 1 "snapshot failed"; exit 0; }
+		tok=$(arm "restore of $id" "$snap")
+		( sleep 2; "$HIST" restore-only "$id" ) </dev/null >/dev/null 2>&1 &
+		json_init
+		json_add_int code 0
+		json_add_string token "$tok"
+		json_add_int timeout "$GUARD"
+		json_add_string before "$snap"
+		json_dump
+		;;
+	history_delete)
+		json_get_vars id
+		out=$("$HIST" delete "$id" 2>&1) && reply 0 "deleted" || reply 2 "$out"
+		;;
+	apply)
+		( /usr/libexec/clusterbox/apply all ) </dev/null >/dev/null 2>&1 &
+		reply 0 "applying"
+		;;
+	*) reply 2 "unknown method" ;;
+	esac
+	;;
+esac
