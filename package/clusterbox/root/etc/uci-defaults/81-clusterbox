@@ -43,6 +43,41 @@ if [ -z "$(uci -q get clusterbox.admin.seeded)" ]; then
 	uci -q commit clusterbox
 fi
 
+# Tailscale: interface tailscale0 in its own zone, routed to the blades
+# (subnet router for 10.20.0.0/24) and allowed to reach the management.
+if [ -x /usr/sbin/tailscaled ] && ! uci -q get network.tailscale >/dev/null; then
+	uci -q batch <<-EOF
+		set network.tailscale=interface
+		set network.tailscale.proto=none
+		set network.tailscale.device=tailscale0
+		commit network
+	EOF
+	has_zone=
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+		[ "$(uci -q get "firewall.$s.name")" = tailscale ] && has_zone=1
+	done
+	if [ -z "$has_zone" ]; then
+		omi_zone=openmiop
+		uci -q show firewall | grep -q "\.name='openmiop'$" || omi_zone=lan
+		uci -q batch >/dev/null <<-EOF
+			add firewall zone
+			set firewall.@zone[-1].name=tailscale
+			add_list firewall.@zone[-1].network=tailscale
+			set firewall.@zone[-1].input=ACCEPT
+			set firewall.@zone[-1].output=ACCEPT
+			set firewall.@zone[-1].forward=ACCEPT
+			add firewall forwarding
+			set firewall.@forwarding[-1].src=tailscale
+			set firewall.@forwarding[-1].dest=$omi_zone
+			commit firewall
+		EOF
+	fi
+	uci -q get clusterbox.admin.zones | grep -qw tailscale || {
+		uci -q add_list clusterbox.admin.zones=tailscale
+		uci -q commit clusterbox
+	}
+fi
+
 # Daily configuration snapshot.
 CRON=${CB_CRON:-/etc/crontabs/root}
 mkdir -p "${CRON%/*}"

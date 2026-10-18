@@ -1,0 +1,12 @@
+{
+	"id": "cluster",
+	"entry": "addon.js",
+	"name": "ClusterBox",
+	"version": "1.0.0",
+	"description": "Mixtile ClusterBox BMC: cluster topology, nodes, management access, services, configuration history, Tailscale.",
+	"author": { "name": "OpenMIOP" },
+	"license": "GPL-2.0",
+	"css": "style.css",
+	"files": ["addon.js", "style.css"],
+	"nav": { "route": "/cluster", "label": "CLUSTER", "placement": "top" }
+}

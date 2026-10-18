@@ -1,0 +1,10 @@
+#!/bin/sh
+# The web root opens MoCI (cluster.html redirects to /moci/#/cluster);
+# LuCI stays at /cgi-bin/luci. Only when no index page was chosen yet.
+uci -q get uhttpd.main.index_page >/dev/null && exit 0
+uci -q batch <<-EOT
+	add_list uhttpd.main.index_page=cluster.html
+	add_list uhttpd.main.index_page=index.html
+	commit uhttpd
+EOT
+exit 0

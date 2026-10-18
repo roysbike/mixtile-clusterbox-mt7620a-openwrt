@@ -1,0 +1,35 @@
+/* ClusterBox add-on for MoCI: topology map and node cards. Colours come
+   from the MoCI theme variables. */
+.cb-topo { width: 100%; height: auto; display: block; }
+.cb-topo .cb-box { fill: var(--glass-bg, rgba(255, 255, 255, 0.04)); stroke: var(--glass-border, rgba(255, 255, 255, 0.12)); stroke-width: 1; }
+.cb-topo .cb-box.up { stroke: var(--success-green, #22c55e); }
+.cb-topo .cb-box.down { stroke: var(--alert-red, #ef4444); }
+.cb-topo .cb-box.off { stroke: var(--steel-muted, #6b7280); stroke-dasharray: 4 3; }
+.cb-topo text { fill: var(--starship-steel, #e5e7eb); font-family: var(--font-sans, sans-serif); font-size: 12px; }
+.cb-topo text.cb-title { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+.cb-topo text.cb-sub { fill: var(--steel-muted, #9ca3af); font-size: 11px; }
+.cb-topo text.cb-rate { fill: var(--primary-accent, #60a5fa); font-family: var(--font-mono, monospace); font-size: 10.5px; }
+.cb-topo .cb-link { fill: none; stroke-width: 2; stroke: var(--steel-muted, #6b7280); }
+.cb-topo .cb-link.up { stroke: var(--success-green, #22c55e); }
+.cb-topo .cb-link.down { stroke: var(--alert-red, #ef4444); stroke-dasharray: 5 4; }
+.cb-topo .cb-link.off { stroke-dasharray: 2 4; }
+.cb-topo .cb-link.flow { stroke-dasharray: 6 6; animation: cb-flow 1.2s linear infinite; }
+@keyframes cb-flow { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) { .cb-topo .cb-link.flow { animation: none; } }
+
+.cb-nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+.cb-node { padding: 16px; }
+.cb-node-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.cb-node-name { font-weight: 600; letter-spacing: 0.04em; }
+.cb-node-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.cb-node-row span:first-child { color: var(--steel-muted, #9ca3af); }
+.cb-node-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.cb-muted { color: var(--steel-muted, #9ca3af); font-size: 13px; }
+.cb-mono { font-family: var(--font-mono, monospace); font-size: 12px; }
+.cb-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.cb-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.cb-diff { max-height: 60vh; overflow: auto; font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre; }
+.cb-diff .add { color: var(--success-green, #22c55e); }
+.cb-diff .del { color: var(--alert-red, #ef4444); }
+.cb-diff .hunk { color: var(--primary-accent, #60a5fa); }
+.cb-banner { padding: 12px 16px; margin-bottom: 16px; border-left: 3px solid var(--warning-amber, #f59e0b); }

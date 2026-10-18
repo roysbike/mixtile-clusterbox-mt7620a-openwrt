@@ -3,17 +3,64 @@
 		"description": "ClusterBox BMC management: topology, access, services, configuration history",
 		"read": {
 			"ubus": {
-				"clusterbox": [ "topology", "admin_get", "pending", "history_list", "history_files", "history_file" ],
-				"nodectl": [ "status", "log", "console_log", "leases", "pubkey" ]
+				"clusterbox": [
+					"topology",
+					"admin_get",
+					"pending",
+					"history_list",
+					"history_files",
+					"history_file",
+					"tailscale_status"
+				],
+				"nodectl": [
+					"status",
+					"log",
+					"console_log",
+					"leases",
+					"pubkey"
+				],
+				"file": [
+					"read"
+				]
 			},
-			"uci": [ "clusterbox", "nodectl" ]
+			"uci": [
+				"clusterbox",
+				"nodectl"
+			],
+			"file": {
+				"/overlay/config-history/*": [
+					"read"
+				],
+				"/etc/config-history/*": [
+					"read"
+				]
+			}
 		},
 		"write": {
 			"ubus": {
-				"clusterbox": [ "admin_set", "confirm", "history_snapshot", "history_restore", "history_delete", "apply" ],
-				"nodectl": [ "action", "rescan", "console", "send", "fan" ]
+				"clusterbox": [
+					"admin_set",
+					"confirm",
+					"history_snapshot",
+					"history_restore",
+					"history_delete",
+					"apply",
+					"tailscale_up",
+					"tailscale_down",
+					"tailscale_logout"
+				],
+				"nodectl": [
+					"action",
+					"rescan",
+					"console",
+					"send",
+					"fan"
+				]
 			},
-			"uci": [ "clusterbox", "nodectl" ]
+			"uci": [
+				"clusterbox",
+				"nodectl"
+			]
 		}
 	}
 }

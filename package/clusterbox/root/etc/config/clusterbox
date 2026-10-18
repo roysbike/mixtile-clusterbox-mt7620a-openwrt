@@ -15,6 +15,7 @@ config admin 'admin'
 	option console_port '7682'
 	list zones 'wan'
 	list zones 'openmiop'
+	list zones 'tailscale'
 
 # WAN: if DHCP gives no address within fallback_delay seconds, add
 # fallback_ipaddr (and a default route via fallback_gateway) so the BMC

@@ -289,6 +289,44 @@ history_file() {
 	json_dump
 }
 
+ts_status() {
+	local st
+	json_init
+	if [ ! -x /usr/sbin/tailscale ]; then
+		json_add_boolean installed 0
+		json_dump
+		return
+	fi
+	st=$(tailscale status --json --peers=false 2>/dev/null)
+	json_add_boolean installed 1
+	json_add_string state "$(echo "$st" | jsonfilter -e '@.BackendState' 2>/dev/null)"
+	json_add_string auth_url "$(echo "$st" | jsonfilter -e '@.AuthURL' 2>/dev/null)"
+	json_add_string dnsname "$(echo "$st" | jsonfilter -e '@.Self.DNSName' 2>/dev/null)"
+	json_add_string ipaddr "$(echo "$st" | jsonfilter -e '@.Self.TailscaleIPs[0]' 2>/dev/null)"
+	json_add_string routes "$(echo "$st" | jsonfilter -e '@.Self.PrimaryRoutes[*]' 2>/dev/null | tr '\n' ' ')"
+	json_dump
+}
+
+ts_up() {
+	local authkey routes ssh
+	json_get_vars authkey routes ssh
+	[ -x /usr/sbin/tailscale ] || { reply 2 "tailscale is not installed"; return; }
+	case "$authkey" in *[!A-Za-z0-9_-]*) reply 2 "invalid auth key"; return ;; esac
+	set -- up --reset --accept-dns=false --timeout=30s
+	[ "$routes" = 1 ] && set -- "$@" --advertise-routes=10.20.0.0/24
+	[ "$ssh" = 1 ] && set -- "$@" --ssh
+	if [ -n "$authkey" ]; then
+		set -- "$@" --auth-key="$authkey"
+		out=$(tailscale "$@" 2>&1) && reply 0 "connected" || reply 1 "$out"
+	else
+		# Without a key "up" waits for the browser login; the login URL
+		# shows up in the status (AuthURL) a moment later.
+		( tailscale "$@" ) </dev/null >/dev/null 2>&1 &
+		sleep 3
+		reply 0 "login started"
+	fi
+}
+
 case "$1" in
 list)
 	cat <<-'EOF'
@@ -304,7 +342,11 @@ list)
 		"history_snapshot": { "reason": "" },
 		"history_restore": { "id": "" },
 		"history_delete": { "id": "" },
-		"apply": {}
+		"apply": {},
+		"tailscale_status": {},
+		"tailscale_up": { "authkey": "", "routes": "1", "ssh": "0" },
+		"tailscale_down": {},
+		"tailscale_logout": {}
 	}
 	EOF
 	;;
@@ -353,6 +395,14 @@ call)
 	apply)
 		( /usr/libexec/clusterbox/apply all ) </dev/null >/dev/null 2>&1 &
 		reply 0 "applying"
+		;;
+	tailscale_status) ts_status ;;
+	tailscale_up) ts_up ;;
+	tailscale_down)
+		out=$(tailscale down 2>&1) && reply 0 "down" || reply 1 "$out"
+		;;
+	tailscale_logout)
+		out=$(tailscale logout 2>&1) && reply 0 "logged out" || reply 1 "$out"
 		;;
 	*) reply 2 "unknown method" ;;
 	esac
