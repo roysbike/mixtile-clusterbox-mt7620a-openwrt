@@ -604,19 +604,21 @@ endef
 TARGET_DEVICES += hiwifi_hc5861
 
 define Device/cluster-box-control-V120
-  $(Device/uimage-lzma-loader)
   SOC := mt7620a
   DEVICE_VENDOR := Mixtile
   DEVICE_MODEL := CLUSTER BOX CONTROL
   DEVICE_PACKAGES := kmod-usb2 kmod-usb-ohci kmod-phy-realtek kmod-usb-ledtrig-usbport
   SUPPORTED_DEVICES := cluster-box-control-V120
-  # The vendor U-Boot 1.1.3 (Ralink SDK) decompresses an lzma uImage itself;
-  # the 23.05 kernel (8.2 MiB unpacked) boots that way, the 6.12 one
-  # (9.5 MiB) did not. With the lzma-loader U-Boot copies an uncompressed
-  # loader, which unpacks the kernel to 0x80000000. The initramfs kernel
-  # (for booting from RAM over TFTP, U-Boot menu 1) unpacks to 31 MiB, so
-  # the loader runs at 40 MiB instead of the default 24 MiB (0x81800000).
+  # The vendor U-Boot 1.1.3 (Ralink SDK) loads the kernel uImage from the
+  # eMMC to 0x80c00000 and unpacks the lzma itself to 0x80000000; the 6.12
+  # kernel (9.5 MiB unpacked) boots that way (tested 2026-10-18). The
+  # initramfs kernel unpacks to 31 MiB, which would overrun the image at
+  # 0x80c00000, so it goes through the lzma-loader (uImage type none) at
+  # 40 MiB. It is for bring-up only: booted from RAM with U-Boot
+  # `mmc read` + `bootm` (U-Boot TFTP does not reach the 1G port).
+  LOADER_TYPE := bin
   LZMA_TEXT_START := 0x82800000
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | loader-kernel | uImage none
   # The BMC boots from the SD card: the kernel at mmcblk0p1 (10 MiB from
   # sector 16), the squashfs at mmcblk0p2 (50 MiB) right after it, the
   # overlay on mmcblk0p3. platform.sh writes this image at sector 16.
