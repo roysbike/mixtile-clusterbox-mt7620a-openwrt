@@ -1,5 +1,5 @@
 /*
- * nodectl - power, console, status and flashing control for Mixtile Blade3
+ * nodectl - power, console and status control for Mixtile Blade3
  * nodes in a Mixtile ClusterBox (MT7620A controller).
  */
 #define _GNU_SOURCE
@@ -32,7 +32,6 @@
 #define RUN_DIR "/var/run/nodectl"
 #define LOG_DIR "/var/log/nodectl"
 #define LOCK_DIR "/var/lock"
-#define FLASH_HELPER "/usr/libexec/nodectl/flash"
 #define CONSOLE_BAUD "1500000"
 #define CONSOLE_CLIENTS 8
 #define CONSOLE_ESCAPE 0x1d /* Ctrl-] */
@@ -61,8 +60,6 @@ struct opts {
 	int no_reboot;
 	int yes;
 	int timeout;
-	const char *source;
-	const char *target;
 	char **rest;
 	int nrest;
 };
@@ -1332,63 +1329,6 @@ static int cmd_ssh(struct opts *o)
 	return EXIT_FAIL;
 }
 
-static int cmd_flash(struct opts *o)
-{
-	int n = single_node(o);
-	const char *ip = node_cfg(n, "ipaddr", NULL);
-	char node[4];
-	int st, ret;
-	pid_t pid;
-
-	if (!o->source) {
-		fprintf(stderr, "flash requires -f <image file or https:// URL>\n");
-		return EXIT_USAGE;
-	}
-	if (!ip) {
-		logmsg(LOG_ERR, "node %d: no ipaddr configured", n);
-		return EXIT_FAIL;
-	}
-	if (!o->yes && isatty(0)) {
-		char ans[8] = "";
-		printf("This will OVERWRITE %s on node %d (%s). Type 'yes' to continue: ",
-		       o->target ? o->target : cfg_get("global", "flash_target", "/dev/mmcblk0"),
-		       n, ip);
-		fflush(stdout);
-		if (!fgets(ans, sizeof(ans), stdin) || strncmp(ans, "yes", 3))
-			return EXIT_FAIL;
-	}
-
-	background("flash", o);
-	if (node_lock(n, "flash"))
-		return EXIT_BUSY;
-
-	snprintf(node, sizeof(node), "%d", n);
-	setenv("NODE", node, 1);
-	setenv("NODE_IP", ip, 1);
-	setenv("NODE_USER", node_cfg(n, "ssh_user", cfg_get("global", "ssh_user", "root")), 1);
-	if (node_cfg(n, "ssh_password", NULL))
-		setenv("SSHPASS", node_cfg(n, "ssh_password", NULL), 1);
-	setenv("SOURCE", o->source, 1);
-	setenv("TARGET", o->target ? o->target : cfg_get("global", "flash_target", "/dev/mmcblk0"), 1);
-
-	logmsg(LOG_NOTICE, "node %d: flashing %s", n, o->source);
-	pid = fork();
-	if (pid == 0) {
-		execl(FLASH_HELPER, FLASH_HELPER, (char *)NULL);
-		_exit(127);
-	}
-	ret = (pid > 0 && waitpid(pid, &st, 0) > 0 && WIFEXITED(st)) ? WEXITSTATUS(st) : EXIT_FAIL;
-	logmsg(ret ? LOG_ERR : LOG_NOTICE, "node %d: flash %s", n, ret ? "FAILED" : "finished");
-	if (!ret && !o->no_reboot) {
-		struct opts h = { .hard = 1 };
-		logmsg(LOG_NOTICE, "node %d: power cycling into the new image", n);
-		if (do_reboot(n, &h))
-			ret = EXIT_FAIL;
-	}
-	node_unlock(n);
-	return ret ? EXIT_FAIL : EXIT_OK;
-}
-
 static int cmd_boot(struct opts *o)
 {
 	const char *action = cfg_get("global", "boot_action", "poweron");
@@ -1433,8 +1373,6 @@ static void usage(FILE *fp)
 	"  consoled -n N                    console server with log (run by procd)\n"
 	"  ssh      -n N [-- command...]    SSH to the node\n"
 	"  fan      [PERCENT]               show or set fan duty\n"
-	"  flash    -n N -f IMAGE|URL [--target DEV] [--no-reboot] [-y]\n"
-	"                                   stream an OS image to the node disk\n"
 	"  boot                             apply boot_action (used by init)\n"
 	"\n"
 	"Common options:\n"
@@ -1492,12 +1430,6 @@ static void parse_opts(int argc, char **argv, struct opts *o)
 			o->yes = 1;
 		} else if (!strcmp(a, "--timeout") && next) {
 			o->timeout = atoi(next);
-			i++;
-		} else if (!strcmp(a, "-f") && next) {
-			o->source = next;
-			i++;
-		} else if (!strcmp(a, "--target") && next) {
-			o->target = next;
 			i++;
 		} else if (a[0] != '-') {
 			o->rest = &argv[i];
@@ -1571,8 +1503,6 @@ int main(int argc, char **argv)
 		ret = cmd_fan(&o);
 	} else if (!strcmp(cmd, "ssh")) {
 		ret = cmd_ssh(&o);
-	} else if (!strcmp(cmd, "flash")) {
-		ret = cmd_flash(&o);
 	} else if (!strcmp(cmd, "boot")) {
 		ret = cmd_boot(&o);
 	} else {

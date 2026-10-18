@@ -69,9 +69,6 @@ return view.extend({
 		o = s.option(form.Value, 'ssh_user', _('Default SSH user'));
 		o.default = 'root';
 
-		o = s.option(form.Value, 'flash_target', _('Default flash target'));
-		o.default = '/dev/mmcblk0';
-
 		o = s.option(form.Flag, 'console', _('Serial console servers'),
 			_('Keep node UARTs open, record them to /var/log/nodectl/consoleN.log and allow shared access.'));
 		o.default = '1';
@@ -92,7 +89,7 @@ return view.extend({
 		o = s.option(form.Value, 'name', _('Name'));
 
 		o = s.option(form.Value, 'ipaddr', _('IP address'),
-			_('Node address reachable from the ClusterBox, used for status, SSH and flashing.'));
+			_('Node address reachable from the ClusterBox, used for status and SSH.'));
 		o.datatype = 'ip4addr';
 		leases.forEach(function(l) {
 			o.value(l.ipaddr, '%s (%s %s)'.format(l.ipaddr, l.hostname || '?', l.mac));
@@ -131,7 +128,7 @@ return view.extend({
 		return m.render().then(function(node) {
 			node.appendChild(E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('ClusterBox SSH public key')),
-				E('p', {}, _('Add this line to ~/.ssh/authorized_keys on each node for passwordless SSH console and flashing.')),
+				E('p', {}, _('Add this line to ~/.ssh/authorized_keys on each node for a passwordless SSH console.')),
 				E('pre', { 'style': 'white-space:pre-wrap;word-break:break-all' }, pubkey || _('Unable to read key'))
 			]));
 			return node;

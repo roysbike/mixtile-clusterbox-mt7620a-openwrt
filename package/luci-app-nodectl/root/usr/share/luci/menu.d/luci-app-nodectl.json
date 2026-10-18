@@ -6,10 +6,11 @@
 			"type": "firstchild"
 		},
 		"depends": {
-			"acl": [ "luci-app-nodectl" ]
+			"acl": [
+				"luci-app-nodectl"
+			]
 		}
 	},
-
 	"admin/cluster/nodes": {
 		"title": "Nodes",
 		"order": 10,
@@ -18,25 +19,6 @@
 			"path": "nodectl/nodes"
 		}
 	},
-
-	"admin/cluster/flash": {
-		"title": "Flash",
-		"order": 20,
-		"action": {
-			"type": "view",
-			"path": "nodectl/flash"
-		}
-	},
-
-	"admin/cluster/rescue": {
-		"title": "Rescue / PXE",
-		"order": 25,
-		"action": {
-			"type": "view",
-			"path": "nodectl/rescue"
-		}
-	},
-
 	"admin/cluster/settings": {
 		"title": "Settings",
 		"order": 30,
@@ -45,7 +27,9 @@
 			"path": "nodectl/settings"
 		},
 		"depends": {
-			"uci": { "nodectl": true }
+			"uci": {
+				"nodectl": true
+			}
 		}
 	}
 }

@@ -107,8 +107,12 @@ ok "kmod-tun and all $(find "$r/lib/modules" -name '*.ko' | wc -l) modules: MIPS
 
 # nodectl
 for f in bin/nodectl usr/libexec/rpcd/nodectl www/luci-static/resources/view/nodectl/nodes.js \
-	www/luci-static/resources/view/nodectl/flash.js usr/share/luci/menu.d/luci-app-nodectl.json etc/config/nodectl; do
+	usr/share/luci/menu.d/luci-app-nodectl.json etc/config/nodectl; do
 	[ -e "$r/$f" ] || fail "/$f missing"
+done
+for f in usr/libexec/nodectl/flash www/luci-static/resources/view/nodectl/flash.js \
+	www/luci-static/resources/view/nodectl/rescue.js; do
+	[ -e "$r/$f" ] && fail "/$f is back (flashing and PXE were removed)"
 done
 file -b "$r/bin/nodectl" | grep -q MIPS || fail "nodectl is not MIPS"
 ok "nodectl + luci-app-nodectl"
