@@ -45,6 +45,10 @@ cp "$(ls -t "$tdir"/*.manifest | head -n1)" "$extras/firmware.manifest"
 for f in config.buildinfo feeds.buildinfo version.buildinfo; do
 	[ -f "$tdir/$f" ] && cp "$tdir/$f" "$extras/"
 done
+# RAM-boot kernel for bring-up over TFTP (U-Boot menu 1); not released.
+for f in "$tdir"/*-initramfs-kernel.bin; do
+	[ -f "$f" ] && cp "$f" "$extras/"
+done
 
 sha=$(sha256sum "$out/$image" | cut -d' ' -f1)
 size=$(stat -c %s "$out/$image")
