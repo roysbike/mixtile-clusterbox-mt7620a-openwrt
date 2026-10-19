@@ -199,7 +199,8 @@ jobs:
           } >> .config
           make defconfig
           for p in openmiop kmod-omi-rc mixtile-release mixtile-update luci-app-mixtile-update nodectl luci-app-nodectl kmod-tun \
-            luci luci-app-firewall sudo bash sshpass picocom pciutils clusterbox moci moci-app-clusterbox tailscale; do
+            luci luci-app-firewall sudo bash sshpass picocom pciutils clusterbox moci moci-app-clusterbox tailscale \
+            openvpn-mbedtls luci-app-openvpn kmod-wireguard wireguard-tools luci-proto-wireguard; do
             grep -qx "CONFIG_PACKAGE_${p}=y" .config || { echo "CONFIG_PACKAGE_${p} is not enabled"; exit 1; }
           done
 
