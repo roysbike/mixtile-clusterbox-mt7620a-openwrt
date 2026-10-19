@@ -397,20 +397,24 @@ valid_node() {
 	return 1
 }
 
+# Console bytes as JSON-safe text: control characters except tab,
+# newline, CR and ESC dropped; bytes above 0x7f (line noise while a blade
+# resets, not valid UTF-8, which rpcd rejects) shown as "?".
+text_bytes() {
+	tr -d '\000-\010\013\014\016-\032\034-\037' | tr '\200-\377' '?'
+}
+
 # stdin as a JSON string: the bytes as they are, quotes, backslashes and
 # the control characters left by tr escaped. jshn cannot carry this
 # much: it hands strings over in the environment (128 KiB at most).
 json_text() {
-	{ cat; printf x; } | awk '
-		function e(s) {
-			gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s)
-			gsub(/\r/, "\\r", s); gsub("\033", "\\u001b", s)
-			return s
-		}
-		BEGIN { printf "\"" }
-		NR > 1 { printf "%s\\n", e(prev) }
-		{ prev = $0 }
-		END { sub(/x$/, "", prev); printf "%s\"", e(prev) }'
+	local t r e
+	t=$(printf '\t'); r=$(printf '\r'); e=$(printf '\033')
+	# Escaping in sed: busybox awk's gsub() drops the backslash of "\\"
+	# and "\"" in the replacement.
+	{ cat; printf x; } |
+		sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$t/\\\\t/g" -e "s/$r/\\\\r/g" -e "s/$e/\\\\u001b/g" |
+		awk 'BEGIN { printf "\"" } NR > 1 { printf "%s\\n", prev } { prev = $0 } END { sub(/x$/, "", prev); printf "%s\"", prev }'
 }
 
 file_size() {
@@ -437,8 +441,8 @@ console_boots() {
 	json_dump
 }
 
-# Bytes [offset, offset+length) of one file, control characters except
-# tab, newline, CR and ESC dropped; "next" is the offset after them.
+# Bytes [offset, offset+length) of one file as text (text_bytes); "next"
+# is the offset after them.
 console_read() {
 	local node name offset length f size skip
 	json_get_vars node name offset length
@@ -457,7 +461,7 @@ console_read() {
 		"$name" "$size" "$offset" $((offset + length))
 	# dd seeks to the 4 KiB block, tail cuts the rest.
 	dd if="$f" bs=4096 skip=$((offset / 4096)) count=$(((skip + length + 4095) / 4096)) 2>/dev/null |
-		tail -c +$((skip + 1)) | head -c "$length" | tr -d '\000-\010\013\014\016-\032\034-\037' | json_text
+		tail -c +$((skip + 1)) | head -c "$length" | text_bytes | json_text
 	echo ' }'
 }
 
@@ -478,7 +482,7 @@ console_grep() {
 			{ l = $0; gsub(esc, "", l) }
 			index(tolower(l), p) { print name, off + 0, substr(l, 1, 400) }
 			{ off += length($0) + 1 }' "$f"
-	done | head -n 500 | tr -d '\000-\010\013\014\016-\032\034-\037' | json_text
+	done | head -n 500 | text_bytes | json_text
 	echo ' }'
 }
 
