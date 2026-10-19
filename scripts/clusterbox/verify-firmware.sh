@@ -119,7 +119,7 @@ ok "nodectl + luci-app-nodectl"
 
 # ClusterBox management backend, MoCI UI, VPN (Tailscale, OpenVPN, WireGuard)
 for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/clusterbox/confhist \
-	usr/libexec/clusterbox/wanwatch etc/init.d/clusterbox etc/config/clusterbox \
+	usr/libexec/clusterbox/wanwatch usr/libexec/clusterbox/availwatch etc/init.d/clusterbox etc/config/clusterbox \
 	etc/uci-defaults/80-clusterbox-network etc/uci-defaults/81-clusterbox \
 	usr/share/rpcd/acl.d/clusterbox.json www/moci/index.html www/moci/js/core.js \
 	usr/libexec/rpcd/moci www/moci/js/addons/cluster/manifest.json www/moci/js/addons/cluster/addon.js \

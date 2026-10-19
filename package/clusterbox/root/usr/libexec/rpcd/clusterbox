@@ -343,6 +343,126 @@ ts_up() {
 	fi
 }
 
+# Node availability (availwatch): the events of the last "hours" and
+# the state of every node (and of the watcher, node 0) before them.
+availability() {
+	local hours f now
+	json_get_vars hours
+	case "$hours" in ''|*[!0-9]*) hours=24 ;; esac
+	[ "$hours" -gt 2160 ] && hours=2160
+	f=/overlay/log/clusterbox/availability
+	[ -f "$f" ] || f=/var/log/clusterbox/availability
+	now=$(date +%s)
+	awk -v from=$((now - hours * 3600)) -v now="$now" '
+		$1 !~ /^[0-9]+$/ || $2 !~ /^[0-4]$/ || $3 !~ /^[a-z]+$/ { next }
+		$1 < from { before[$2] = $3; next }
+		{ ev[n++] = "[" $1 "," $2 ",\"" $3 "\"]" }
+		END {
+			printf "{\"now\":%d,\"from\":%d,\"initial\":{", now, from
+			sep = ""
+			for (k in before) { printf "%s\"%s\":\"%s\"", sep, k, before[k]; sep = "," }
+			printf "},\"events\":["
+			for (i = 0; i < n; i++) printf "%s%s", (i ? "," : ""), ev[i]
+			print "]}"
+		}' "$f" 2>/dev/null || echo '{"events":[]}'
+}
+
+# Console archive of nodectl: <dir>/nodeN/<boot>[.pNNN].log
+console_dir() {
+	echo "$(uci -q get nodectl.global.console_archive_dir || echo /overlay/log/nodectl)/node$1"
+}
+
+valid_node() {
+	case "$1" in 1|2|3|4) return 0 ;; esac
+	reply 2 "invalid node"
+	return 1
+}
+
+# stdin as a JSON string: the bytes as they are, quotes, backslashes and
+# the control characters left by tr escaped. jshn cannot carry this
+# much: it hands strings over in the environment (128 KiB at most).
+json_text() {
+	{ cat; printf x; } | awk '
+		function e(s) {
+			gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s)
+			gsub(/\r/, "\\r", s); gsub("\033", "\\u001b", s)
+			return s
+		}
+		BEGIN { printf "\"" }
+		NR > 1 { printf "%s\\n", e(prev) }
+		{ prev = $0 }
+		END { sub(/x$/, "", prev); printf "%s\"", e(prev) }'
+}
+
+file_size() {
+	ls -ln "$1" 2>/dev/null | awk '{ print $5 + 0 }'
+}
+
+console_boots() {
+	local node d f
+	json_get_vars node
+	valid_node "$node" || return
+	d=$(console_dir "$node")
+	json_init
+	json_add_boolean archive "$([ -d "$d" ] && echo 1 || echo 0)"
+	json_add_array files
+	for f in "$d"/*.log; do
+		[ -f "$f" ] || continue
+		json_add_object ""
+		json_add_string name "${f##*/}"
+		json_add_double size "$(file_size "$f")"
+		json_add_int mtime "$(date -r "$f" +%s)"
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+# Bytes [offset, offset+length) of one file, control characters except
+# tab, newline, CR and ESC dropped; "next" is the offset after them.
+console_read() {
+	local node name offset length f size skip
+	json_get_vars node name offset length
+	valid_node "$node" || return
+	echo "$name" | grep -qE '^[0-9]{8}-[0-9]{6}(\.p[0-9]{3})?\.log$' || { reply 2 "invalid file"; return; }
+	f=$(console_dir "$node")/$name
+	[ -f "$f" ] || { reply 2 "no such file"; return; }
+	case "$offset" in ''|*[!0-9]*) offset=0 ;; esac
+	case "$length" in ''|*[!0-9]*) length=131072 ;; esac
+	[ "$length" -gt 262144 ] && length=262144
+	size=$(file_size "$f")
+	[ "$offset" -gt "$size" ] && offset=$size
+	[ $((offset + length)) -gt "$size" ] && length=$((size - offset))
+	skip=$((offset % 4096))
+	printf '{ "name": "%s", "size": %d, "offset": %d, "next": %d, "data": ' \
+		"$name" "$size" "$offset" $((offset + length))
+	# dd seeks to the 4 KiB block, tail cuts the rest.
+	dd if="$f" bs=4096 skip=$((offset / 4096)) count=$(((skip + length + 4095) / 4096)) 2>/dev/null |
+		tail -c +$((skip + 1)) | head -c "$length" | tr -d '\000-\010\013\014\016-\032\034-\037' | json_text
+	echo ' }'
+}
+
+# Case-insensitive literal search in all files of one boot, terminal
+# escapes ignored: up to 500 lines as "<file> <offset of the line> <text>".
+console_grep() {
+	local node boot pattern d f
+	json_get_vars node boot pattern
+	valid_node "$node" || return
+	echo "$boot" | grep -qE '^[0-9]{8}-[0-9]{6}$' || { reply 2 "invalid boot"; return; }
+	[ -n "$pattern" ] && [ ${#pattern} -le 200 ] || { reply 2 "pattern: 1-200 characters"; return; }
+	d=$(console_dir "$node")
+	printf '{ "matches": '
+	for f in "$d/$boot.log" "$d/$boot".p*.log; do
+		[ -f "$f" ] || continue
+		P="$pattern" awk -v name="${f##*/}" '
+			BEGIN { p = tolower(ENVIRON["P"]); esc = "\033\\[[0-9;?]*[ -/]*[@-~]" }
+			{ l = $0; gsub(esc, "", l) }
+			index(tolower(l), p) { print name, off + 0, substr(l, 1, 400) }
+			{ off += length($0) + 1 }' "$f"
+	done | head -n 500 | tr -d '\000-\010\013\014\016-\032\034-\037' | json_text
+	echo ' }'
+}
+
 case "$1" in
 list)
 	cat <<-'EOF'
@@ -363,7 +483,11 @@ list)
 		"tailscale_status": {},
 		"tailscale_up": { "authkey": "", "routes": "1", "ssh": "0" },
 		"tailscale_down": {},
-		"tailscale_logout": {}
+		"tailscale_logout": {},
+		"availability": { "hours": 24 },
+		"console_boots": { "node": 1 },
+		"console_read": { "node": 1, "name": "", "offset": 0, "length": 131072 },
+		"console_grep": { "node": 1, "boot": "", "pattern": "" }
 	}
 	EOF
 	;;
@@ -417,6 +541,10 @@ call)
 		reply 0 "applying"
 		;;
 	tailscale_status) ts_status ;;
+	availability) availability ;;
+	console_boots) console_boots ;;
+	console_read) console_read ;;
+	console_grep) console_grep ;;
 	tailscale_up) ts_up ;;
 	tailscale_down)
 		out=$(tailscale down 2>&1) && reply 0 "down" || reply 1 "$out"

@@ -33,3 +33,40 @@
 .cb-diff .del { color: var(--alert-red, #ef4444); }
 .cb-diff .hunk { color: var(--primary-accent, #60a5fa); }
 .cb-banner { padding: 12px 16px; margin-bottom: 16px; border-left: 3px solid var(--warning-amber, #f59e0b); }
+
+/* Five tabs do not fit a phone: scroll them instead of widening the page. */
+#addon-cluster-page { min-width: 0; }
+#addon-cluster-page .tabs { overflow-x: auto; scrollbar-width: none; }
+#addon-cluster-page .tabs .tab-btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* Availability strip (last 24 h) in the node cards. */
+.cb-av { width: 100%; height: 12px; display: block; margin-top: 8px; border-radius: 3px; overflow: hidden; background: var(--glass-bg, rgba(255, 255, 255, 0.04)); }
+.cb-av .cb-av-online { fill: var(--success-green, #22c55e); }
+.cb-av .cb-av-booting { fill: var(--warning-amber, #f59e0b); }
+.cb-av .cb-av-nolink { fill: var(--alert-red, #ef4444); }
+.cb-av .cb-av-off { fill: var(--steel-muted, #6b7280); }
+.cb-av .cb-av-busy { fill: var(--primary-accent, #60a5fa); }
+.cb-av .cb-av-unknown { fill: transparent; }
+.cb-av-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--steel-muted, #9ca3af); margin-top: 2px; }
+
+/* Console log viewer. */
+.modal-content.cb-logs { width: min(1200px, 96vw); max-width: none; min-width: 0; height: 88vh; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
+.cb-logs-head { gap: 10px; flex-wrap: wrap; }
+.cb-logs-head .modal-title { flex: 1 1 auto; }
+.cb-logs-head .cb-logs-boot { width: auto; flex: 0 1 340px; min-width: 0; padding: 8px 10px; }
+.cb-logs-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 24px; }
+.cb-logs-bar .cb-check { margin: 0 6px; }
+.cb-logs-bar .cb-logs-find { width: 220px; padding: 7px 10px; }
+.cb-logs-text { flex: 1; min-height: 0; overflow: auto; margin: 0 24px; padding: 8px 10px; white-space: pre; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.45; background: rgba(0, 0, 0, 0.25); border-radius: 6px; }
+.cb-logs-text mark { background: var(--warning-amber, #f59e0b); color: #000; }
+.cb-logs-matches { max-height: 25vh; overflow: auto; margin: 0 24px 8px; font-family: var(--font-mono, monospace); font-size: 12px; }
+.cb-logs-hit { padding: 2px 4px; cursor: pointer; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.cb-logs-hit:hover { background: var(--glass-bg, rgba(255, 255, 255, 0.06)); }
+@media (max-width: 640px) {
+	.modal-content.cb-logs { height: 94vh; }
+	.cb-logs-head { padding: 16px; }
+	.cb-logs-head .cb-logs-boot { flex: 1 1 100%; }
+	.cb-logs-bar { padding: 8px 16px; }
+	.cb-logs-bar .cb-logs-find { width: 100%; }
+	.cb-logs-text, .cb-logs-matches { margin-left: 16px; margin-right: 16px; }
+}

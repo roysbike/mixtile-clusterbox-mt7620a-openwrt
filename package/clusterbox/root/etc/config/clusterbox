@@ -54,3 +54,8 @@ config log 'log'
 config history 'history'
 	option keep '50'
 	option daily '1'
+
+# Node availability log (/overlay/log/clusterbox/availability): the
+# state of every node is checked every "interval" seconds.
+config avail 'avail'
+	option interval '20'

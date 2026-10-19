@@ -10,6 +10,18 @@ const TABS = [
 	['tailscale', 'TAILSCALE']
 ];
 const POLL_MS = 5000;
+const AVAIL_MS = 60000;
+// Console log viewer: bytes per request, chunks kept in the view.
+const LOG_CHUNK = 131072;
+const LOG_KEEP = 24;
+const AV_TEXT = {
+	online: 'online',
+	booting: 'booting',
+	nolink: 'no PCIe link',
+	off: 'powered off',
+	busy: 'nodectl job',
+	unknown: 'no data'
+};
 
 export default class ClusterBoxAddon {
 	constructor(core) {
@@ -99,6 +111,7 @@ export default class ClusterBoxAddon {
 	cleanup() {
 		this.stopPolling();
 		clearInterval(this.widgetTimer);
+		this.closeLogs();
 	}
 
 	// ---- helpers ---------------------------------------------------------
@@ -191,6 +204,11 @@ export default class ClusterBoxAddon {
 			try {
 				const t = await this.call('topology');
 				const rates = this.rates(t);
+				// The log is up to a minute behind: look again sooner when
+				// it disagrees with what the nodes show now.
+				if ((t.cluster?.nodes || []).some(n => this.availInfo?.[n.id] && this.availInfo[n.id].state !== this.nodeState(n)))
+					this.availAt = Math.min(this.availAt || 0, Date.now() - AVAIL_MS + 10000);
+				await this.loadAvailability();
 				document.getElementById('cb-topo').innerHTML = this.topologySvg(t, rates, false);
 				this.renderNodes(t);
 			} catch (e) {
@@ -282,7 +300,9 @@ export default class ClusterBoxAddon {
 			const cls = n.power === false ? 'off' : n.pcie_link ? 'up' : n.power ? 'down' : 'off';
 			const sub = n.power === false ? 'powered off'
 				: [this.linkText(n.link_gen, n.link_width) || (n.power ? 'no PCIe link' : 'unknown'), `slot ${n.id}`].join(' · ');
-			const sub2 = [n.ipaddr, n.reachable === true ? 'online' : n.reachable === false ? 'no answer' : ''].filter(Boolean).join(' · ');
+			const av = this.availInfo?.[n.id];
+			const sub2 = [n.ipaddr, n.reachable === true ? 'online' : n.reachable === false ? 'no answer' : '',
+				av?.since && av.state === this.nodeState(n) ? this.fmtDur(av.now - av.since) : ''].filter(Boolean).join(' · ');
 			svg += box('node', y, h, cls, (n.name || `blade${n.id}`).toUpperCase(), sub, sub2);
 			svg += link(right('sw'), mid, C.node[0], y + h / 2, cls === 'up' ? 'up' : cls === 'off' ? 'off' : 'down');
 		});
@@ -311,16 +331,24 @@ export default class ClusterBoxAddon {
 					<div class="cb-node-row"><span>PCIe</span><span>${n.pcie_link ? this.esc(this.linkText(n.link_gen, n.link_width) || 'link') : this.core.renderBadge('error', 'DOWN')}</span></div>
 					<div class="cb-node-row"><span>Address</span><span class="cb-mono">${this.esc(n.ipaddr || '—')}</span></div>
 					<div class="cb-node-row"><span>Console</span><span>${n.tty_present ? 'serial' : '—'}</span></div>
+					${this.availCard(n)}
 					<div class="cb-node-actions">
 						${n.power ? `<button class="action-btn-sm" data-node="${id}" data-act="shutdown">SHUTDOWN</button>
 							<button class="action-btn-sm" data-node="${id}" data-act="reboot">REBOOT</button>
 							<button class="action-btn-sm danger" data-node="${id}" data-act="poweroff">POWER OFF</button>`
 						: `<button class="action-btn-sm" data-node="${id}" data-act="poweron">POWER ON</button>`}
 						${n.tty_present ? `<button class="action-btn-sm" data-node="${id}" data-act="console">CONSOLE</button>` : ''}
+						<button class="action-btn-sm" data-node="${id}" data-name="${this.esc(n.name || `blade${id}`)}" data-act="logs">LOGS</button>
 					</div></div>`;
 			})
 			.join('');
-		el.querySelectorAll('[data-act]').forEach(btn => btn.addEventListener('click', () => this.nodeAction(Number(btn.dataset.node), btn.dataset.act)));
+		el.querySelectorAll('[data-act]').forEach(btn =>
+			btn.addEventListener('click', () =>
+				btn.dataset.act === 'logs'
+					? this.openLogs(Number(btn.dataset.node), btn.dataset.name)
+					: this.nodeAction(Number(btn.dataset.node), btn.dataset.act)
+			)
+		);
 	}
 
 	async nodeAction(node, act) {
@@ -341,6 +369,393 @@ export default class ClusterBoxAddon {
 		} catch (e) {
 			this.core.showToast(`Node ${node}: ${e.message}`, 'error');
 		}
+	}
+
+	// ---- availability (clusterbox availwatch) -----------------------------
+
+	async loadAvailability() {
+		if (this.availAt && Date.now() - this.availAt < AVAIL_MS) return;
+		try {
+			const a = await this.call('availability', { hours: 24 });
+			this.availAt = Date.now();
+			this.availInfo = {};
+			for (const id of [1, 2, 3, 4]) this.availInfo[id] = this.availSegments(a, id);
+		} catch {
+			this.availInfo = null;
+		}
+	}
+
+	// States of one node over [from, now]. While the watcher (the BMC)
+	// was not running, and until it saw the node again, the state is
+	// unknown.
+	availSegments(a, id) {
+		const evs = (a.events || []).filter(e => e[1] === 0 || e[1] === id).sort((x, y) => x[0] - y[0]);
+		const segs = [];
+		let t0 = a.from;
+		let cur = a.initial?.[id] || 'unknown';
+		let down = a.initial?.['0'] === 'stop';
+		const push = (t, st) => {
+			if (t <= t0) return;
+			const last = segs[segs.length - 1];
+			if (last && last.state === st) last.to = t;
+			else segs.push({ from: t0, to: t, state: st });
+		};
+		for (const [t, n, st] of evs) {
+			push(t, down ? 'unknown' : cur);
+			t0 = Math.max(t0, t);
+			if (n === 0) {
+				down = st === 'stop';
+				cur = 'unknown';
+			} else {
+				cur = st;
+			}
+		}
+		push(a.now, down ? 'unknown' : cur);
+		let known = 0;
+		let online = 0;
+		for (const g of segs) {
+			if (g.state === 'unknown') continue;
+			known += g.to - g.from;
+			if (g.state === 'online') online += g.to - g.from;
+		}
+		const last = segs[segs.length - 1];
+		return {
+			segs,
+			from: a.from,
+			now: a.now,
+			state: last?.state || 'unknown',
+			since: last && last.state !== 'unknown' && last.from > a.from ? last.from : null,
+			pct: known ? (online * 100) / known : null
+		};
+	}
+
+	availStrip(av) {
+		const span = av.now - av.from || 1;
+		const when = t => new Date(t * 1000).toLocaleString();
+		const rects = av.segs
+			.map(g => {
+				const x = ((g.from - av.from) / span) * 1000;
+				const w = Math.max(((g.to - g.from) / span) * 1000, 1);
+				return `<rect class="cb-av-${g.state}" x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="12">
+					<title>${this.esc(AV_TEXT[g.state] || g.state)}: ${this.esc(when(g.from))} – ${this.esc(when(g.to))}</title></rect>`;
+			})
+			.join('');
+		return `<svg class="cb-av" viewBox="0 0 1000 12" preserveAspectRatio="none" role="img" aria-label="availability, last 24 hours">${rects}</svg>`;
+	}
+
+	// The state availwatch logs for a node of nodectl status.
+	nodeState(n) {
+		if (n.busy) return 'busy';
+		if (n.power == null) return 'unknown';
+		if (!n.power) return 'off';
+		if (!n.pcie_link) return 'nolink';
+		return n.reachable ? 'online' : 'booting';
+	}
+
+	availCard(n) {
+		const av = this.availInfo?.[Number(n.id)];
+		if (!av) return '';
+		const st = this.nodeState(n);
+		const pct = av.pct == null ? '—' : `${av.pct >= 99.95 ? '100' : av.pct.toFixed(1)}%`;
+		const since = av.since && av.state === st ? `${AV_TEXT[st]} for ${this.fmtDur(av.now - av.since)}` : AV_TEXT[st] || st;
+		return `<div class="cb-node-row"><span>Online, 24 h</span><span>${pct}</span></div>
+			<div class="cb-node-row"><span>State</span><span>${this.esc(since)}</span></div>
+			${this.availStrip(av)}
+			<div class="cb-av-axis"><span>24 h ago</span><span>now</span></div>`;
+	}
+
+	fmtDur(s) {
+		s = Math.max(0, Math.round(s));
+		const d = Math.floor(s / 86400);
+		const h = Math.floor((s % 86400) / 3600);
+		const m = Math.floor((s % 3600) / 60);
+		if (d) return `${d}d ${h}h`;
+		if (h) return `${h}h ${m}m`;
+		if (m) return `${m}m`;
+		return `${s}s`;
+	}
+
+	// ---- console logs (nodectl archive on the eMMC, a file per boot) -------
+
+	async openLogs(node, name) {
+		this.closeLogs();
+		const m = document.createElement('div');
+		m.className = 'modal';
+		m.innerHTML = `<div class="modal-backdrop"></div>
+			<div class="modal-content cb-logs">
+				<div class="modal-header cb-logs-head">
+					<h3 class="modal-title">${this.esc(String(name).toUpperCase())} · CONSOLE LOG</h3>
+					<select class="form-input cb-logs-boot" id="cb-logs-boot" aria-label="boot"></select>
+					<button class="action-btn-sm" data-lg="close">CLOSE</button>
+				</div>
+				<div class="cb-logs-bar">
+					<button class="action-btn-sm" data-lg="start">FROM BOOT</button>
+					<button class="action-btn-sm" data-lg="earlier">EARLIER</button>
+					<button class="action-btn-sm" data-lg="end">LATEST</button>
+					<label class="cb-check"><input type="checkbox" id="cb-logs-follow" checked> follow</label>
+					<input class="form-input cb-logs-find" id="cb-logs-find" placeholder="find in this boot" aria-label="find">
+					<button class="action-btn-sm" data-lg="find">FIND</button>
+					<button class="action-btn-sm" data-lg="download">DOWNLOAD</button>
+					<span class="cb-muted" id="cb-logs-info"></span>
+				</div>
+				<div class="cb-logs-matches" id="cb-logs-matches" hidden></div>
+				<pre class="cb-logs-text" id="cb-logs-text">Loading…</pre>
+				<div class="cb-logs-bar"><button class="action-btn-sm" data-lg="later">LATER</button></div>
+			</div>`;
+		document.body.appendChild(m);
+		const lg = { node, name, m, boots: [], boot: null, chunks: [], timer: null, busy: false };
+		this.lg = lg;
+		m.querySelector('.modal-backdrop').onclick = () => this.closeLogs();
+		lg.onKey = e => e.key === 'Escape' && this.closeLogs();
+		document.addEventListener('keydown', lg.onKey);
+		m.querySelectorAll('[data-lg]').forEach(b => (b.onclick = () => this.logsAction(b.dataset.lg)));
+		m.querySelector('#cb-logs-find').onkeydown = e => e.key === 'Enter' && this.logsAction('find');
+		m.querySelector('#cb-logs-boot').onchange = e => this.logsSelect(e.target.value);
+		try {
+			await this.logsBoots();
+		} catch (e) {
+			this.logsText(`Console log unavailable: ${e.message}`);
+			return;
+		}
+		if (!lg.boots.length) {
+			this.logsText('No console log of this node yet (the archive starts with the next output of its console).');
+			return;
+		}
+		await this.logsSelect(lg.boots[0].id);
+		lg.timer = setInterval(() => this.logsFollow(), 3000);
+	}
+
+	closeLogs() {
+		const lg = this.lg;
+		if (!lg) return;
+		clearInterval(lg.timer);
+		document.removeEventListener('keydown', lg.onKey);
+		lg.m.remove();
+		this.lg = null;
+	}
+
+	// Files of the node grouped by boot, newest first; a boot is its
+	// parts back to back.
+	async logsBoots() {
+		const lg = this.lg;
+		const res = await this.call('console_boots', { node: lg.node });
+		const byId = new Map();
+		for (const f of res.files || []) {
+			const id = f.name.slice(0, 15);
+			if (!byId.has(id)) byId.set(id, { id, parts: [], total: 0 });
+			const b = byId.get(id);
+			b.parts.push({ name: f.name, size: f.size, start: b.total });
+			b.total += f.size;
+		}
+		lg.boots = [...byId.values()].sort((a, b) => (a.id < b.id ? 1 : -1));
+		const sel = lg.m.querySelector('#cb-logs-boot');
+		const cur = lg.boot?.id;
+		sel.innerHTML = lg.boots
+			.map((b, i) => {
+				const t = `${b.id.slice(0, 4)}-${b.id.slice(4, 6)}-${b.id.slice(6, 8)} ${b.id.slice(9, 11)}:${b.id.slice(11, 13)}:${b.id.slice(13, 15)}`;
+				return `<option value="${b.id}">${t} · ${this.fmtBytes(b.total)}${i === 0 ? ' · current' : ''}</option>`;
+			})
+			.join('');
+		if (cur) sel.value = cur;
+		if (cur) lg.boot = lg.boots.find(b => b.id === cur) || lg.boot;
+	}
+
+	fmtBytes(n) {
+		if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+		if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+		return `${n} B`;
+	}
+
+	async logsSelect(id) {
+		const lg = this.lg;
+		lg.boot = lg.boots.find(b => b.id === id);
+		lg.m.querySelector('#cb-logs-matches').hidden = true;
+		lg.m.querySelector('#cb-logs-follow').checked = lg.boot === lg.boots[0];
+		await this.logsAction('end');
+	}
+
+	// Bytes [pos, end) of the boot, at most one part per request.
+	async logsRead(pos, end) {
+		const lg = this.lg;
+		let text = '';
+		while (pos < end) {
+			const p = lg.boot.parts.find(q => pos >= q.start && pos < q.start + q.size);
+			if (!p) break;
+			const len = Math.min(end - pos, p.start + p.size - pos, LOG_CHUNK);
+			const r = await this.call('console_read', { node: lg.node, name: p.name, offset: pos - p.start, length: len });
+			text += r.data || '';
+			if (r.next <= pos - p.start) break;
+			pos = p.start + r.next;
+		}
+		return { text: this.cleanLog(text), end: pos };
+	}
+
+	// Terminal escapes and carriage returns out.
+	cleanLog(t) {
+		return t
+			.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+			.replace(/\x1b[()][0-9A-Za-z]|\x1b[=>78DEHMc]/g, '')
+			.replace(/\r+\n/g, '\n')
+			.replace(/\r/g, '');
+	}
+
+	async logsAction(act) {
+		const lg = this.lg;
+		if (!lg || !lg.boot || lg.busy) return;
+		if (act === 'close') return this.closeLogs();
+		lg.busy = true;
+		try {
+			const total = lg.boot.total;
+			const lo = lg.chunks.length ? lg.chunks[0].lo : 0;
+			const hi = lg.chunks.length ? lg.chunks[lg.chunks.length - 1].hi : 0;
+			if (act === 'end') {
+				const from = Math.max(0, total - LOG_CHUNK);
+				const r = await this.logsRead(from, total);
+				lg.chunks = [{ lo: from, hi: r.end, text: r.text }];
+				this.logsRender('bottom');
+			} else if (act === 'start') {
+				const r = await this.logsRead(0, Math.min(total, LOG_CHUNK));
+				lg.chunks = [{ lo: 0, hi: r.end, text: r.text }];
+				lg.m.querySelector('#cb-logs-follow').checked = false;
+				this.logsRender('top');
+			} else if (act === 'earlier' && lo > 0) {
+				const from = Math.max(0, lo - LOG_CHUNK);
+				const r = await this.logsRead(from, lo);
+				lg.chunks.unshift({ lo: from, hi: lo, text: r.text });
+				if (lg.chunks.length > LOG_KEEP) lg.chunks.pop();
+				this.logsRender('keep-bottom');
+			} else if (act === 'later' && hi < total) {
+				const r = await this.logsRead(hi, Math.min(total, hi + LOG_CHUNK));
+				lg.chunks.push({ lo: hi, hi: r.end, text: r.text });
+				if (lg.chunks.length > LOG_KEEP) lg.chunks.shift();
+				this.logsRender('keep');
+			} else if (act === 'find') {
+				await this.logsFind();
+			} else if (act === 'download') {
+				await this.logsDownload();
+			}
+		} catch (e) {
+			this.core.showToast(`Console log: ${e.message}`, 'error');
+		} finally {
+			lg.busy = false;
+		}
+	}
+
+	logsText(t) {
+		const pre = this.lg?.m.querySelector('#cb-logs-text');
+		if (pre) pre.textContent = t;
+	}
+
+	logsRender(scroll, mark) {
+		const lg = this.lg;
+		const pre = lg.m.querySelector('#cb-logs-text');
+		const before = pre.scrollHeight - pre.scrollTop;
+		const text = lg.chunks.map(c => c.text).join('');
+		const i = mark ? text.indexOf(mark) : -1;
+		if (i >= 0) {
+			const m = document.createElement('mark');
+			m.textContent = mark;
+			pre.replaceChildren(text.slice(0, i), m, text.slice(i + mark.length));
+			m.scrollIntoView({ block: 'center' });
+		} else {
+			pre.textContent = text || '(empty)';
+			if (scroll === 'bottom') pre.scrollTop = pre.scrollHeight;
+			else if (scroll === 'top') pre.scrollTop = 0;
+			else if (scroll === 'keep-bottom') pre.scrollTop = pre.scrollHeight - before;
+		}
+		const lo = lg.chunks[0]?.lo || 0;
+		const hi = lg.chunks[lg.chunks.length - 1]?.hi || 0;
+		lg.m.querySelector('#cb-logs-info').textContent =
+			`${this.fmtBytes(lo)} – ${this.fmtBytes(hi)} of ${this.fmtBytes(lg.boot.total)}`;
+	}
+
+	// New output of the current boot, or a new boot of the node.
+	async logsFollow() {
+		const lg = this.lg;
+		if (!lg || lg.busy || !lg.m.querySelector('#cb-logs-follow').checked) return;
+		lg.busy = true;
+		try {
+			const newest = lg.boots[0]?.id;
+			const hi = lg.chunks.length ? lg.chunks[lg.chunks.length - 1].hi : 0;
+			const atEnd = lg.boot && hi >= lg.boot.total;
+			await this.logsBoots();
+			if (lg.boots[0] && lg.boots[0].id !== newest) {
+				lg.boot = lg.boots[0];
+				lg.m.querySelector('#cb-logs-boot').value = lg.boot.id;
+				lg.chunks = [];
+			}
+			if (!atEnd && lg.chunks.length) return;
+			const total = lg.boot.total;
+			if (total <= hi && lg.chunks.length) return;
+			const pre = lg.m.querySelector('#cb-logs-text');
+			const bottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+			const r = await this.logsRead(hi, Math.min(total, hi + 2 * LOG_CHUNK));
+			lg.chunks.push({ lo: hi, hi: r.end, text: r.text });
+			if (lg.chunks.length > LOG_KEEP) lg.chunks.shift();
+			this.logsRender(bottom ? 'bottom' : 'keep');
+		} catch {
+			// next round
+		} finally {
+			lg.busy = false;
+		}
+	}
+
+	async logsFind() {
+		const lg = this.lg;
+		const pattern = lg.m.querySelector('#cb-logs-find').value.trim();
+		const box = lg.m.querySelector('#cb-logs-matches');
+		if (!pattern) {
+			box.hidden = true;
+			return;
+		}
+		const res = await this.call('console_grep', { node: lg.node, boot: lg.boot.id, pattern }, 'clusterbox', 60000);
+		const hits = (res.matches || '')
+			.split('\n')
+			.filter(Boolean)
+			.map(l => {
+				const a = l.indexOf(' ');
+				const b = l.indexOf(' ', a + 1);
+				return { file: l.slice(0, a), off: Number(l.slice(a + 1, b)), text: this.cleanLog(l.slice(b + 1)) };
+			});
+		box.hidden = false;
+		box.innerHTML = hits.length
+			? `<div class="cb-muted">${hits.length}${hits.length >= 500 ? '+' : ''} lines</div>` +
+				hits.map((h, i) => `<div class="cb-logs-hit" data-hit="${i}">${this.esc(h.text)}</div>`).join('')
+			: '<div class="cb-muted">Not found in this boot.</div>';
+		box.querySelectorAll('[data-hit]').forEach(el =>
+			el.addEventListener('click', async () => {
+				const h = hits[Number(el.dataset.hit)];
+				const p = lg.boot.parts.find(q => q.name === h.file);
+				if (!p) return;
+				const pos = p.start + h.off;
+				const from = Math.max(0, pos - LOG_CHUNK / 2);
+				lg.m.querySelector('#cb-logs-follow').checked = false;
+				const r = await this.logsRead(from, Math.min(lg.boot.total, from + LOG_CHUNK));
+				lg.chunks = [{ lo: from, hi: r.end, text: r.text }];
+				this.logsRender('keep', h.text.trimEnd());
+			})
+		);
+	}
+
+	async logsDownload() {
+		const lg = this.lg;
+		const info = lg.m.querySelector('#cb-logs-info');
+		const parts = [];
+		for (let pos = 0; pos < lg.boot.total; ) {
+			const r = await this.logsRead(pos, Math.min(lg.boot.total, pos + 2 * LOG_CHUNK));
+			if (r.end <= pos) break;
+			parts.push(r.text);
+			pos = r.end;
+			info.textContent = `downloading ${this.fmtBytes(pos)} of ${this.fmtBytes(lg.boot.total)}`;
+		}
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(new Blob(parts, { type: 'text/plain' }));
+		a.download = `${lg.name}-${lg.boot.id}.log`;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+		info.textContent = `downloaded ${this.fmtBytes(lg.boot.total)}`;
 	}
 
 	// ---- dashboard widget ----------------------------------------------

@@ -1,0 +1,62 @@
+#!/bin/sh
+# Node availability log for the web UI. Every "interval" seconds the
+# state of each node from nodectl: online (answers on its check port),
+# booting (PCIe link, no answer yet), nolink (powered, no PCIe link),
+# off, busy (a nodectl job runs), unknown. A line "<epoch> <node> <state>"
+# on every change; "<epoch> 0 start|stop" marks when this watcher (the
+# BMC) ran. On the eMMC overlay, in RAM without it.
+
+. /usr/share/libubox/jshn.sh
+
+INTERVAL=$(uci -q get clusterbox.avail.interval)
+case "$INTERVAL" in ''|*[!0-9]*|0) INTERVAL=20 ;; esac
+DIR=/overlay/log/clusterbox
+grep -q ' /overlay ext4 ' /proc/mounts || DIR=/var/log/clusterbox
+LOG=$DIR/availability
+# Last time the watcher was alive (written every 5 min, not on every
+# pass, to spare the eMMC).
+SEEN=$DIR/availability.seen
+MAX=262144
+
+mkdir -p "$DIR"
+[ -s "$SEEN" ] && echo "$(cat "$SEEN") 0 stop" >> "$LOG"
+echo "$(date +%s) 0 start" >> "$LOG"
+
+beat=0
+while :; do
+	now=$(date +%s)
+	j=$(/bin/nodectl status --json 2>/dev/null)
+	if [ -n "$j" ] && json_load "$j" 2>/dev/null && json_select nodes 2>/dev/null; then
+		i=1
+		while json_select "$i" 2>/dev/null; do
+			id= power= pcie_link= reachable= busy=
+			json_get_vars id power pcie_link reachable busy
+			if [ -n "$busy" ]; then st=busy
+			elif [ -z "$power" ]; then st=unknown
+			elif [ "$power" != 1 ]; then st=off
+			elif [ "$pcie_link" != 1 ]; then st=nolink
+			elif [ "$reachable" = 1 ]; then st=online
+			else st=booting
+			fi
+			case "$id" in 1|2|3|4)
+				eval "prev=\$last_$id"
+				if [ "$st" != "$prev" ]; then
+					echo "$now $id $st" >> "$LOG"
+					eval "last_$id=$st"
+				fi
+			;; esac
+			json_select ..
+			i=$((i + 1))
+		done
+	fi
+	if [ $((now - beat)) -ge 300 ]; then
+		echo "$now" > "$SEEN"
+		beat=$now
+		if [ "$(wc -c < "$LOG")" -gt "$MAX" ]; then
+			tail -n 4000 "$LOG" > "$LOG.new" && mv "$LOG.new" "$LOG"
+			# The trimmed part may have held a node's current state.
+			last_1= last_2= last_3= last_4=
+		fi
+	fi
+	sleep "$INTERVAL"
+done

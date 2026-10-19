@@ -11,7 +11,11 @@
 					"history_list",
 					"history_files",
 					"history_file",
-					"tailscale_status"
+					"tailscale_status",
+					"availability",
+					"console_boots",
+					"console_read",
+					"console_grep"
 				],
 				"nodectl": [
 					"status",
