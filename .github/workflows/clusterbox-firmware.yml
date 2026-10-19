@@ -222,6 +222,13 @@ jobs:
         if: env.SELF_HOSTED == 'true'
         run: sudo rm -rf bin/targets
 
+      - name: File times from this commit
+        # SOURCE_DATE_EPOCH comes from version.date (the upstream release
+        # date), so every image had the same file times and ETags: uhttpd
+        # sends no Cache-Control, and browsers kept the web UI of the
+        # previous firmware from their cache. Checkout restores the file.
+        run: git log -1 --no-show-signature --format=%ct HEAD > version.date
+
       - name: Build firmware
         env:
           MAKE_VERBOSE: ""
