@@ -113,6 +113,12 @@ in its state; the topology map shows that duration too. **LOGS** opens
 the console log of a node: pick a boot, read it from the first line,
 follow new output, search the whole boot, download it.
 
+The top of the **Dashboard** sums the box up in tiles: nodes online, each
+blade (state, time in it, 24 h online share), PCIe fabric, BMC (load,
+memory, uptime), Internet, the forwarded cluster services (Kubernetes
+API, ingress: answering or not, checked every 30 s with `nodectl probe`)
+and Tailscale.
+
 The LuCI login page, the page footer and Status → Overview show
 `Mixtile ClusterBox · Firmware <version> · commit <sha> · OpenMIOP v<n>`, read
 from `/etc/mixtile-release`.
