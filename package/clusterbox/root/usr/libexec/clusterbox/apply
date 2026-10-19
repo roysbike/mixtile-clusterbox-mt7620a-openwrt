@@ -178,6 +178,12 @@ apply_dns() {
 apply_ntp() {
 	# chrony, when installed and enabled, serves time itself.
 	[ -x /etc/init.d/chronyd ] && /etc/init.d/chronyd enabled && return 0
+	# Otherwise sysntpd keeps the clock and serves the blades; a chrony
+	# installed on older firmware leaves it disabled.
+	if [ -z "$CB_NORELOAD" ] && ! /etc/init.d/sysntpd enabled; then
+		/etc/init.d/sysntpd enable
+		mark system
+	fi
 	uset system.ntp.enable_server "$(cb ntp serve_blades 1)"
 }
 
