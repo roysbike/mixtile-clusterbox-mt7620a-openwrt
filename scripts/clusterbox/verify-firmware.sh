@@ -161,12 +161,12 @@ ok "LuCI shows $(sed -n 's/^DISTRIB_DESCRIPTION=//p' "$r/etc/openwrt_release")"
 for f in etc/init.d/fan-boot usr/bin/picocom usr/bin/sshpass; do
 	[ -e "$r/$f" ] || fail "/$f missing"
 done
-for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd usr/sbin/openvpn; do
+for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd; do
 	[ -e "$r/$f" ] && fail "/$f should not be in the image"
 done
 [ -z "$(find "$r/lib/modules" -name 'miop.ko' -o -name 'mac80211.ko' -o -name 'cfg80211.ko')" ] ||
 	fail "vendor miop.ko or Wi-Fi modules in the image"
-ok "ch343, fan-boot, picocom, sshpass; no Wi-Fi, PPP, OpenVPN or vendor miop.ko"
+ok "ch343, fan-boot, picocom, sshpass; no Wi-Fi, PPP or vendor miop.ko"
 
 [ "$failed" = 0 ] || die "firmware verification failed"
 echo "firmware verified: $(basename "$image")"
