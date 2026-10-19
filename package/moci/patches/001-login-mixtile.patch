@@ -1,0 +1,47 @@
+Login form defaults to the mixtile user (the default BMC login is
+mixtile/mixtile); the password page changes the password of the user
+that is logged in, root or mixtile, instead of always root.
+
+--- a/files/rpcd-moci
++++ b/files/rpcd-moci
+@@ -88,7 +88,7 @@
+ 				password=$(printf '%s' "$input" | jsonfilter -e '@.password')
+ 
+ 				case "$username" in
+-					root) : ;;
++					root|mixtile) : ;;
+ 					*) printf '{ "result": false }\n'; exit 0 ;;
+ 				esac
+ 
+--- a/moci/index.html
++++ b/moci/index.html
+@@ -22,7 +22,7 @@
+ 				<div class="login-card">
+ 					<h1>OPENWRT</h1>
+ 					<form id="login-form">
+-						<input type="text" id="username" placeholder="Username" autocomplete="username" />
++						<input type="text" id="username" placeholder="Username" autocomplete="username" value="mixtile" />
+ 						<input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+ 						<label class="remember-label">
+ 							<input type="checkbox" id="remember-me" class="custom-checkbox" />
+--- a/moci/js/core.js
++++ b/moci/js/core.js
+@@ -329,6 +329,7 @@
+ 		if (data.result && data.result[1] && data.result[1].ubus_rpc_session) {
+ 			this.sessionId = data.result[1].ubus_rpc_session;
+ 			localStorage.setItem('ubus_session', this.sessionId);
++			localStorage.setItem('ubus_user', username);
+ 
+ 			if (rememberMe) {
+ 				this.saveCredentials(username, password);
+--- a/moci/js/modules/system.js
++++ b/moci/js/modules/system.js
+@@ -184,7 +184,7 @@
+ 		}
+ 		try {
+ 			const [status, result] = await this.core.ubusCall('moci', 'setPassword', {
+-				username: 'root',
++				username: localStorage.getItem('ubus_user') || 'root',
+ 				password: newPw
+ 			});
+ 			if (status !== 0 || !result?.result) throw new Error('setPassword failed');
