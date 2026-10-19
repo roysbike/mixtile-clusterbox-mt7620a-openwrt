@@ -89,6 +89,30 @@ if the module does not load, or when `/etc/openmiop.use-helper` exists
 | `nodectl`, `luci-app-nodectl` | Blade power/reset/console/flash/PXE control, LuCI **Cluster** menu |
 | `custom-files` | Board files from Mixtile, including the vendor `miop.ko` (Mixtile's own MIOP driver for `4586:b6f2` endpoints; prebuilt binary from upstream, not used by OpenMIOP) |
 
+### Node console logs and availability (25.12 port)
+
+Each blade's serial console (CH343 USB UART on the BMC, 1.5 Mbaud) is
+recorded by `nodectl consoled` to the BMC's eMMC, one file per boot of
+the blade: `/overlay/log/nodectl/nodeN/YYYYmmdd-HHMMSS.log` (long boots
+continue in `.pNNN.log` parts of `console_archive_part_mb`), every line
+prefixed with the BMC time. A new file starts on a power on or reset from
+`nodectl`, on a U-Boot or kernel boot banner, or when the kernel
+timestamps go back (the blade rebooted by itself). The oldest boots are
+deleted above `console_archive_mb` (512) or `console_archive_boots` (100)
+per blade; settings in `/etc/config/nodectl`. The archive lives outside
+the overlay's upper directory, so firmware updates keep it.
+
+`availwatch` (part of `clusterbox`) checks every 20 s whether each blade
+is powered, has its PCIe link and answers on its check port, and logs
+every change to `/overlay/log/clusterbox/availability`.
+
+In the web UI (**Cluster → Overview**): every node card shows the last
+24 hours as a bar (online, booting, no PCIe link, off, no data while the
+BMC was down), the share of time online and how long the node has been
+in its state; the topology map shows that duration too. **LOGS** opens
+the console log of a node: pick a boot, read it from the first line,
+follow new output, search the whole boot, download it.
+
 The LuCI login page, the page footer and Status → Overview show
 `Mixtile ClusterBox · Firmware <version> · commit <sha> · OpenMIOP v<n>`, read
 from `/etc/mixtile-release`.
