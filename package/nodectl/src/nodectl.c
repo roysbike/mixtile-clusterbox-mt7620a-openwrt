@@ -1598,6 +1598,21 @@ static int cmd_send(struct opts *o)
 	return ret;
 }
 
+/* TCP connect check for scripts (busybox nc has no -z): exit 0 if open. */
+static int cmd_probe(struct opts *o)
+{
+	int port, ms;
+
+	if (o->nrest < 2 || (port = atoi(o->rest[1])) < 1 || port > 65535) {
+		fprintf(stderr, "usage: nodectl probe IPADDR PORT [TIMEOUT_MS]\n");
+		return EXIT_USAGE;
+	}
+	ms = o->nrest > 2 ? atoi(o->rest[2]) : 1500;
+	if (ms < 1 || ms > 10000)
+		ms = 1500;
+	return tcp_check(o->rest[0], port, ms) ? EXIT_OK : EXIT_FAIL;
+}
+
 static int cmd_fan(struct opts *o)
 {
 	char path[64], buf[32];
@@ -1714,6 +1729,7 @@ static void usage(FILE *fp)
 	"  ssh      -n N [-- command...]    SSH to the node\n"
 	"  fan      [PERCENT]               show or set fan duty\n"
 	"  boot                             apply boot_action (used by init)\n"
+	"  probe    IPADDR PORT [MS]        exit 0 if a TCP connect succeeds\n"
 	"\n"
 	"Common options:\n"
 	"  --bg     run in background, log to " LOG_DIR "/nodeN.log\n"
@@ -1802,6 +1818,10 @@ int main(int argc, char **argv)
 	}
 	cmd = argv[1];
 	parse_opts(argc - 2, argv + 2, &o);
+
+	/* No GPIO, config or syslog needed. */
+	if (!strcmp(cmd, "probe"))
+		return cmd_probe(&o);
 
 	openlog("nodectl", 0, LOG_DAEMON);
 	cfg_load();
