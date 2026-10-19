@@ -15,7 +15,8 @@
 					"availability",
 					"console_boots",
 					"console_read",
-					"console_grep"
+					"console_grep",
+					"fw_status"
 				],
 				"nodectl": [
 					"status",
@@ -52,7 +53,10 @@
 					"apply",
 					"tailscale_up",
 					"tailscale_down",
-					"tailscale_logout"
+					"tailscale_logout",
+					"fw_check",
+					"fw_download",
+					"fw_install"
 				],
 				"nodectl": [
 					"action",

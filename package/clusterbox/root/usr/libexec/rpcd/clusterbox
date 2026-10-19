@@ -486,6 +486,32 @@ console_grep() {
 	echo ' }'
 }
 
+# Firmware (mixtile-update): what runs, what the last release check
+# found, the update in progress.
+MU=/usr/libexec/mixtile-update
+
+fw_status() {
+	local st chk base p2
+	st=$("$MU" status 2>/dev/null); [ -n "$st" ] || st='{}'
+	chk=$(cat /tmp/mixtile-update/check.json 2>/dev/null); [ -n "$chk" ] || chk='{}'
+	p2=$(awk '$4 == "mmcblk0p2" { print $3 }' /proc/partitions)
+	json_init
+	json_add_string openwrt "$(. /etc/openwrt_release; echo "$DISTRIB_RELEASE")"
+	json_add_string openwrt_revision "$(. /etc/openwrt_release; echo "$DISTRIB_REVISION")"
+	json_add_string kernel "$(uname -r)"
+	json_add_int rootfs_used_kb "$(df -k /rom 2>/dev/null | awk 'NR == 2 { print $3 }')"
+	json_add_int rootfs_part_kb "${p2:-0}"
+	json_add_int overlay_used_kb "$(df -k /overlay 2>/dev/null | awk 'NR == 2 { print $3 }')"
+	json_add_int overlay_size_kb "$(df -k /overlay 2>/dev/null | awk 'NR == 2 { print $2 }')"
+	json_add_boolean auto_check "$([ "$(uci -q get mixtile-update.main.auto_check)" = 0 ] && echo 0 || echo 1)"
+	json_add_int check_interval "$(uci -q get mixtile-update.main.check_interval || echo 12)"
+	json_add_boolean checking "$(pgrep -f 'mixtile-update check' >/dev/null && echo 1 || echo 0)"
+	json_add_boolean installing "$([ -f /tmp/mixtile-update/install.pid ] && kill -0 "$(cat /tmp/mixtile-update/install.pid)" 2>/dev/null && echo 1 || echo 0)"
+	json_add_string install_log "$(tail -n 5 /tmp/mixtile-update/install.log 2>/dev/null)"
+	base=$(json_dump)
+	printf '%s, "updater": %s, "check": %s }\n' "${base%\}}" "$st" "$chk"
+}
+
 case "$1" in
 list)
 	cat <<-'EOF'
@@ -510,7 +536,11 @@ list)
 		"availability": { "hours": 24 },
 		"console_boots": { "node": 1 },
 		"console_read": { "node": 1, "name": "", "offset": 0, "length": 131072 },
-		"console_grep": { "node": 1, "boot": "", "pattern": "" }
+		"console_grep": { "node": 1, "boot": "", "pattern": "" },
+		"fw_status": {},
+		"fw_check": {},
+		"fw_download": {},
+		"fw_install": {}
 	}
 	EOF
 	;;
@@ -568,6 +598,17 @@ call)
 	console_boots) console_boots ;;
 	console_read) console_read ;;
 	console_grep) console_grep ;;
+	fw_status) fw_status ;;
+	fw_check)
+		# Up to a minute with GitHub: longer than rpcd waits for a plugin.
+		( "$MU" check ) </dev/null >/dev/null 2>&1 &
+		reply 0 "checking"
+		;;
+	fw_download) "$MU" download --background ;;
+	fw_install)
+		out=$("$MU" verify 2>&1) || { printf '%s\n' "$out"; exit 0; }
+		"$MU" install --yes --background
+		;;
 	tailscale_up) ts_up ;;
 	tailscale_down)
 		out=$(tailscale down 2>&1) && reply 0 "down" || reply 1 "$out"

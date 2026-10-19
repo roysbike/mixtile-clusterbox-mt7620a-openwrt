@@ -7,9 +7,14 @@ const TABS = [
 	['access', 'ACCESS'],
 	['services', 'SERVICES'],
 	['history', 'CONFIG HISTORY'],
-	['tailscale', 'TAILSCALE']
+	['tailscale', 'TAILSCALE'],
+	['firmware', 'FIRMWARE']
 ];
 const POLL_MS = 5000;
+// How often an open page looks at the result of the BMC's own background
+// release check (mixtile-update watch); this reads local state only.
+const FW_POLL_MS = 15 * 60 * 1000;
+const RELEASE_RE = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/;
 const AVAIL_MS = 60000;
 // Console log viewer: bytes per request, chunks kept in the view.
 const LOG_CHUNK = 131072;
@@ -34,6 +39,7 @@ export default class ClusterBoxAddon {
 
 	async init() {
 		this.checkPassword();
+		this.fwWatch();
 		// After an access change the browser lands on the new address with
 		// ?cbconfirm=<token>; confirming keeps the change.
 		const params = new URLSearchParams(window.location.search);
@@ -112,6 +118,7 @@ export default class ClusterBoxAddon {
 		this.stopPolling();
 		clearInterval(this.widgetTimer);
 		this.closeLogs();
+		clearInterval(this.fwTimer);
 	}
 
 	// ---- helpers ---------------------------------------------------------
@@ -174,7 +181,8 @@ export default class ClusterBoxAddon {
 			access: () => this.loadAccess(),
 			services: () => this.loadServices(),
 			history: () => this.loadHistory(),
-			tailscale: () => this.loadTailscale()
+			tailscale: () => this.loadTailscale(),
+			firmware: () => this.loadFirmware()
 		};
 		handlers[tab]();
 	}
@@ -839,6 +847,13 @@ export default class ClusterBoxAddon {
 					: svc.map(x => x.name).join(' · ')));
 		if (t.tailscale?.installed)
 			tiles.push(this.tile(t.tailscale.state === 'Running' ? 'ok' : 'off', 'TAILSCALE', t.tailscale.state || 'off', t.tailscale.ipaddr || ''));
+		const fw = this.fw;
+		if (fw) {
+			const u = fw.updater || {};
+			const avail = u.update_available && u.latest_version;
+			tiles.push(this.tile(avail ? 'warn' : 'ok', 'FIRMWARE', this.shortVersion(u.current_version).replace(/ \(.*\)$/, ''),
+				avail ? `${u.latest_version} available` : RELEASE_RE.test(u.current_version || '') ? 'up to date' : `development build · OpenWrt ${fw.openwrt}`));
+		}
 		el.innerHTML = tiles.join('');
 	}
 
@@ -847,6 +862,360 @@ export default class ClusterBoxAddon {
 			<div class="cb-tile-title">${this.esc(title)}</div>
 			<div class="cb-tile-value">${this.esc(value)}</div>
 			${sub ? `<div class="cb-tile-sub">${this.esc(sub)}</div>` : ''}</div>`;
+	}
+
+	// ---- firmware (mixtile-update) ---------------------------------------
+
+	shortVersion(v) {
+		return String(v || '?').replace(/-(\d+)-g([0-9a-f]{7})[0-9a-f]*$/, '+$1 ($2)');
+	}
+
+	async fwLoad() {
+		try {
+			this.fw = await this.call('fw_status');
+		} catch {
+			this.fw = null;
+		}
+		return this.fw;
+	}
+
+	// The BMC checks GitHub by itself (mixtile-update watch); here only its
+	// result is read, and a banner offers a new release.
+	fwWatch() {
+		const tick = async () => {
+			const fw = await this.fwLoad();
+			this.fwBanner(fw);
+		};
+		clearInterval(this.fwTimer);
+		tick();
+		this.fwTimer = setInterval(tick, FW_POLL_MS);
+	}
+
+	fwBanner(fw) {
+		document.getElementById('cb-fw-banner')?.remove();
+		const u = fw?.updater;
+		if (!u?.update_available || !u.latest_version) return;
+		let skip = '';
+		try {
+			skip = localStorage.getItem('cb-fw-skip') || '';
+		} catch {}
+		if (skip === u.latest_version) return;
+		const b = document.createElement('div');
+		b.id = 'cb-fw-banner';
+		b.className = 'stat-card cb-fw-banner';
+		b.innerHTML = `<div><b>Firmware ${this.esc(u.latest_version)}</b> is available
+				<span class="cb-muted">(running ${this.esc(this.shortVersion(u.current_version))})</span></div>
+			<div class="cb-fw-banner-actions">
+				<button class="action-btn-sm" data-fw="notes">WHAT'S NEW</button>
+				<button class="action-btn-sm" data-fw="update">UPDATE</button>
+				<button class="action-btn-sm" data-fw="skip" title="Hide until the next release">×</button>
+			</div>`;
+		b.querySelector('[data-fw="notes"]').onclick = () => this.fwNotes();
+		b.querySelector('[data-fw="update"]').onclick = () => this.fwUpdate();
+		b.querySelector('[data-fw="skip"]').onclick = () => {
+			try {
+				localStorage.setItem('cb-fw-skip', u.latest_version);
+			} catch {}
+			b.remove();
+		};
+		(document.querySelector('main.content') || document.body).prepend(b);
+	}
+
+	// Release notes (GitHub markdown) as HTML: escaped first, then a small
+	// subset — headings, lists, quotes and [!NOTE]-style alerts, code,
+	// tables, bold, links (http/https only).
+	markdown(md) {
+		const inline = t =>
+			this.esc(t)
+				.replace(/`([^`]+)`/g, '<code>$1</code>')
+				.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+				.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, txt, url) => `<a href="${url}" target="_blank" rel="noopener">${txt}</a>`);
+		const out = [];
+		let list = null;
+		let quote = null;
+		let code = null;
+		let table = null;
+		let para = null;
+		const flush = () => {
+			// Hard-wrapped lines of one paragraph go together.
+			if (para) out.push(`<p>${inline(para.join(' '))}</p>`);
+			if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`);
+			if (quote) {
+				const m = quote[0]?.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/);
+				const body = (m ? quote.slice(1) : quote).map(inline).join(' ');
+				out.push(`<blockquote class="cb-md-quote${m ? ` ${m[1].toLowerCase()}` : ''}">${m ? `<b>${m[1]}</b> ` : ''}${body}</blockquote>`);
+			}
+			if (table) {
+				const rows = table.filter(r => !/^\s*\|?\s*:?-+/.test(r)).map(r => r.replace(/^\s*\||\|\s*$/g, '').split('|'));
+				out.push(`<table class="cb-md-table">${rows
+					.map((r, i) => `<tr>${r.map(c => (i ? `<td>${inline(c.trim())}</td>` : `<th>${inline(c.trim())}</th>`)).join('')}</tr>`)
+					.join('')}</table>`);
+			}
+			list = quote = table = para = null;
+		};
+		for (const line of String(md || '').replace(/\r/g, '').split('\n')) {
+			if (code) {
+				if (/^```/.test(line)) {
+					out.push(`<pre class="cb-md-code">${this.esc(code.join('\n'))}</pre>`);
+					code = null;
+				} else code.push(line);
+				continue;
+			}
+			if (/^```/.test(line)) {
+				flush();
+				code = [];
+				continue;
+			}
+			let m;
+			if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+				flush();
+				out.push(`<div class="cb-md-h${m[1].length}">${inline(m[2])}</div>`);
+			} else if ((m = line.match(/^\s*[-*]\s+(.*)$/)) || (m = line.match(/^\s*\d+\.\s+(.*)$/))) {
+				const tag = /^\s*\d+\./.test(line) ? 'ol' : 'ul';
+				if (!list || list.tag !== tag) {
+					flush();
+					list = { tag, items: [] };
+				}
+				list.items.push(m[1]);
+			} else if ((m = line.match(/^>\s?(.*)$/))) {
+				if (!quote) {
+					flush();
+					quote = [];
+				}
+				quote.push(m[1]);
+			} else if (/^\s*\|/.test(line)) {
+				if (!table) {
+					flush();
+					table = [];
+				}
+				table.push(line);
+			} else if (!line.trim()) {
+				flush();
+			} else if (list && /^\s{2,}/.test(line)) {
+				list.items[list.items.length - 1] += ' ' + line.trim();
+			} else {
+				if (!para) {
+					flush();
+					para = [];
+				}
+				para.push(line.trim());
+			}
+		}
+		flush();
+		if (code) out.push(`<pre class="cb-md-code">${this.esc(code.join('\n'))}</pre>`);
+		return out.join('');
+	}
+
+	modal(title, body, buttons) {
+		const m = document.createElement('div');
+		m.className = 'modal';
+		m.innerHTML = `<div class="modal-backdrop"></div>
+			<div class="modal-content cb-fw-modal">
+				<div class="modal-header"><h3 class="modal-title">${this.esc(title)}</h3></div>
+				<div class="modal-body">${body}</div>
+				<div class="modal-footer">${buttons}</div>
+			</div>`;
+		document.body.appendChild(m);
+		m.querySelector('.modal-backdrop').onclick = () => m.remove();
+		return m;
+	}
+
+	async fwNotes() {
+		const fw = this.fw || (await this.fwLoad());
+		const c = fw?.check || {};
+		const u = fw?.updater || {};
+		if (!c.latest_version) return this.core.showToast('No release check yet', 'error');
+		const meta = [
+			c.published_at ? `published ${new Date(c.published_at).toLocaleString()}` : '',
+			c.prerelease ? 'release candidate' : 'stable',
+			c.image_size ? this.fmtBytes(c.image_size) : '',
+			c.signed ? 'signed' : 'not signed',
+			c.openmiop_protocol ? `OpenMIOP v${c.openmiop_protocol}` : ''
+		].filter(Boolean);
+		const m = this.modal(
+			`FIRMWARE ${c.latest_version}`,
+			`<div class="cb-fw-versions"><span>${this.esc(this.shortVersion(u.current_version))}</span><span class="cb-fw-arrow">→</span>
+				<span class="cb-fw-new">${this.esc(c.latest_version)}</span></div>
+				<div class="cb-muted" style="margin-bottom:12px">${this.esc(meta.join(' · '))}</div>
+				<div class="cb-md">${this.markdown(c.release_notes) || '<p class="cb-muted">No release notes.</p>'}</div>`,
+			`${c.release_url ? `<a class="action-btn" href="${this.esc(c.release_url)}" target="_blank" rel="noopener">RELEASE PAGE</a>` : ''}
+				<button class="action-btn" data-fw="close">CLOSE</button>
+				${u.update_available ? '<button class="action-btn" data-fw="update">UPDATE NOW</button>' : ''}`
+		);
+		m.querySelector('[data-fw="close"]').onclick = () => m.remove();
+		const up = m.querySelector('[data-fw="update"]');
+		if (up)
+			up.onclick = () => {
+				m.remove();
+				this.fwUpdate();
+			};
+	}
+
+	// Download, verify, install (mixtile-update), then wait for the BMC to
+	// come back with the new firmware and reload the page.
+	async fwUpdate() {
+		const fw = await this.fwLoad();
+		const c = fw?.check || {};
+		const u = fw?.updater || {};
+		if (!u.update_available) return this.core.showToast('No update available', 'error');
+		if (
+			!confirm(
+				`Install firmware ${c.latest_version}?\n\nThe BMC reboots (a few minutes). It is the PCIe root complex: every blade loses its link and reconnects; blade network through the BMC is down meanwhile.`
+			)
+		)
+			return;
+		document.getElementById('cb-fw-banner')?.remove();
+		const m = this.modal(
+			`UPDATING TO ${c.latest_version}`,
+			`<ol class="cb-fw-steps">
+				<li data-step="download">Download <span class="cb-muted" data-info="download"></span>
+					<div class="progress-bar"><div class="progress-fill" data-bar style="width:0%"></div></div></li>
+				<li data-step="verify">Verify (SHA-256, board, signature)</li>
+				<li data-step="install">Install and reboot the BMC</li>
+				<li data-step="wait">Wait for the BMC <span class="cb-muted" data-info="wait"></span></li>
+			</ol>
+			<div class="cb-muted" data-msg>Do not power off the Cluster Box.</div>`,
+			'<button class="action-btn" data-fw="close" disabled>CLOSE</button>'
+		);
+		m.querySelector('.modal-backdrop').onclick = null;
+		const step = (name, state) => {
+			const li = m.querySelector(`[data-step="${name}"]`);
+			if (li) li.className = state;
+		};
+		const fail = msg => {
+			m.querySelector('[data-msg]').textContent = `Failed: ${msg}`;
+			m.querySelector('[data-fw="close"]').disabled = false;
+			m.querySelector('[data-fw="close"]').onclick = () => m.remove();
+		};
+		const sleep = ms => new Promise(r => setTimeout(r, ms));
+		try {
+			step('download', 'active');
+			let r = await this.call('fw_download', {}, 'clusterbox', 30000);
+			if (r.status === 'error') throw new Error(r.message);
+			for (let n = 0; ; n++) {
+				await sleep(2000);
+				const st = (await this.fwLoad())?.updater || {};
+				const pct = c.image_size ? Math.min(100, (st.downloaded_bytes * 100) / c.image_size) : 0;
+				m.querySelector('[data-bar]').style.width = `${pct.toFixed(0)}%`;
+				m.querySelector('[data-info="download"]').textContent =
+					`${this.fmtBytes(st.downloaded_bytes || 0)} of ${this.fmtBytes(c.image_size || 0)}`;
+				if (st.download === 'done') break;
+				// "none" for a moment while the background download starts.
+				if (st.download === 'failed' || (st.download === 'none' && n > 4)) throw new Error(st.download_error || 'download failed');
+			}
+			step('download', 'done');
+			step('verify', 'active');
+			r = await this.call('fw_install', {}, 'clusterbox', 120000);
+			if (r.status === 'error') throw new Error(r.message);
+			step('verify', 'done');
+			step('install', 'active');
+		} catch (e) {
+			return fail(e.message);
+		}
+		// The BMC goes away during sysupgrade; the page reloads once it
+		// serves the web UI again (index.html picks up the new files).
+		const t0 = Date.now();
+		let down = false;
+		for (;;) {
+			await sleep(3000);
+			const secs = Math.round((Date.now() - t0) / 1000);
+			m.querySelector('[data-info="wait"]').textContent = `${secs} s`;
+			let ok = false;
+			try {
+				ok = (await fetch('/moci/version.txt', { cache: 'no-store' })).ok;
+			} catch {}
+			if (!ok && !down) {
+				down = true;
+				step('install', 'done');
+				step('wait', 'active');
+			}
+			if (ok && down) {
+				step('wait', 'done');
+				m.querySelector('[data-msg]').textContent = 'The BMC is back. Reloading…';
+				await sleep(2000);
+				location.reload();
+				return;
+			}
+			if (secs > 900) return fail('the BMC did not come back within 15 minutes; check it on the network or its UART');
+		}
+	}
+
+	async loadFirmware() {
+		const body = document.getElementById('cb-body');
+		body.innerHTML = '<div class="stat-card">Loading…</div>';
+		const fw = await this.fwLoad();
+		if (!fw) {
+			body.innerHTML = '<div class="stat-card cb-muted">Firmware information unavailable.</div>';
+			return;
+		}
+		const u = fw.updater || {};
+		const c = fw.check || {};
+		const release = RELEASE_RE.test(u.current_version || '');
+		const repo = u.repository ? `https://github.com/${u.repository}` : '';
+		const bar = (used, size, label) => {
+			const pct = size ? Math.min(100, (used * 100) / size) : 0;
+			return `<div class="cb-node-row"><span>${label}</span><span>${this.fmtBytes(used * 1024)} of ${this.fmtBytes(size * 1024)}</span></div>
+				<div class="progress-bar"><div class="progress-fill" style="width:${pct.toFixed(1)}%"></div></div>`;
+		};
+		const checked = u.checked_at ? new Date(u.checked_at) : null;
+		const ago = checked ? this.fmtDur((Date.now() - checked.getTime()) / 1000) : '';
+		let state;
+		if (fw.checking) state = this.core.renderBadge('warning', 'CHECKING');
+		else if (u.update_available) state = this.core.renderBadge('warning', `${u.latest_version} AVAILABLE`);
+		else if (!checked) state = this.core.renderBadge('error', 'NOT CHECKED YET');
+		else state = this.core.renderBadge('success', release ? 'UP TO DATE' : 'NO UPDATE');
+		const last = (u.last_install || '').split(' ');
+		body.innerHTML = `<div class="cb-grid2">
+			<div class="stat-card">
+				<div class="section-title">RUNNING FIRMWARE</div>
+				<div class="cb-fw-big">${this.esc(this.shortVersion(u.current_version))}</div>
+				<div class="cb-muted" style="margin-bottom:12px">${release ? 'release' : 'development build: updates are offered between releases only'}</div>
+				<div class="cb-node-row"><span>OpenWrt</span><span>${this.esc(fw.openwrt)} (${this.esc(fw.openwrt_revision)})</span></div>
+				<div class="cb-node-row"><span>Kernel</span><span>${this.esc(fw.kernel)}</span></div>
+				<div class="cb-node-row"><span>Commit</span><span class="cb-mono">${u.current_commit ? (repo ? `<a href="${this.esc(repo)}/commit/${this.esc(u.current_commit)}" target="_blank" rel="noopener">${this.esc(u.current_commit.slice(0, 10))}</a>` : this.esc(u.current_commit.slice(0, 10))) : '—'}</span></div>
+				<div class="cb-node-row"><span>Built</span><span>${u.build_date ? this.esc(new Date(u.build_date).toLocaleString()) : '—'}</span></div>
+				<div class="cb-node-row"><span>Board</span><span class="cb-mono">${this.esc(u.board || '')}</span></div>
+				<div class="cb-node-row"><span>OpenMIOP protocol</span><span>v${this.esc(u.openmiop_protocol || '?')}</span></div>
+				${last[0] ? `<div class="cb-node-row"><span>Last update</span><span>${this.esc(last[1] || '')} ${last[0] === 'ok' ? this.core.renderBadge('success', 'OK') : this.core.renderBadge('error', 'MISMATCH')}</span></div>` : ''}
+				<div style="margin-top:12px">${bar(fw.rootfs_used_kb, fw.rootfs_part_kb, 'System partition (eMMC p2)')}</div>
+				<div style="margin-top:8px">${bar(fw.overlay_used_kb, fw.overlay_size_kb, 'Overlay, logs (eMMC p3)')}</div>
+			</div>
+			<div class="stat-card">
+				<div class="section-title">UPDATES</div>
+				<div class="cb-node-row"><span>State</span><span>${state}</span></div>
+				<div class="cb-node-row"><span>Latest release</span><span>${c.latest_version ? this.esc(c.latest_version) + (c.prerelease ? ' (rc)' : '') : '—'}</span></div>
+				<div class="cb-node-row"><span>Channel</span><span>${this.esc(u.channel || '')}</span></div>
+				<div class="cb-node-row"><span>Source</span><span>${repo ? `<a href="${this.esc(repo)}/releases" target="_blank" rel="noopener">${this.esc(u.repository)}</a>` : '—'}</span></div>
+				<div class="cb-node-row"><span>Last check</span><span>${checked ? `${this.esc(checked.toLocaleString())} (${ago} ago)` : 'never'}</span></div>
+				<div class="cb-node-row"><span>Background check</span><span>${fw.auto_check ? `every ${fw.check_interval} h` : 'off'}</span></div>
+				${c.message ? `<div class="cb-muted" style="margin-top:8px">${this.esc(c.message)}</div>` : ''}
+				<div class="cb-node-actions">
+					<button class="action-btn-sm" data-fw="check">CHECK NOW</button>
+					${c.latest_version ? `<button class="action-btn-sm" data-fw="notes">WHAT'S NEW IN ${this.esc(c.latest_version)}</button>` : ''}
+					${u.update_available ? '<button class="action-btn-sm" data-fw="update">UPDATE</button>' : ''}
+				</div>
+			</div>
+		</div>
+		${c.release_notes ? `<div class="stat-card" style="margin-top:16px"><div class="section-title">RELEASE NOTES ${this.esc(c.latest_version)}</div><div class="cb-md">${this.markdown(c.release_notes)}</div></div>` : ''}`;
+		body.querySelector('[data-fw="notes"]')?.addEventListener('click', () => this.fwNotes());
+		body.querySelector('[data-fw="update"]')?.addEventListener('click', () => this.fwUpdate());
+		body.querySelector('[data-fw="check"]').addEventListener('click', async e => {
+			e.target.disabled = true;
+			e.target.textContent = 'CHECKING…';
+			const before = u.checked_at;
+			try {
+				await this.call('fw_check');
+				for (let i = 0; i < 40; i++) {
+					await new Promise(r => setTimeout(r, 3000));
+					const f = await this.fwLoad();
+					if (f && !f.checking && f.updater?.checked_at !== before) break;
+				}
+			} catch (err) {
+				this.core.showToast(`Check failed: ${err.message}`, 'error');
+			}
+			this.fwBanner(this.fw);
+			if (document.getElementById('cb-body') === body) this.loadFirmware();
+		});
 	}
 
 	// ---- access ------------------------------------------------------------

@@ -126,6 +126,12 @@ for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/cl
 	www/cluster.html usr/sbin/tailscaled usr/sbin/openvpn usr/bin/wg; do
 	[ -e "$r/$f" ] || fail "/$f missing"
 done
+# Web files reach the browser with a version (moci-version); the firmware
+# watch of mixtile-update runs at boot.
+ls "$r"/etc/rc.d/S*moci-version >/dev/null 2>&1 || fail "moci-version is not enabled at boot"
+grep -q 'version.txt' "$r/www/moci/index.html" || fail "MoCI index.html does not load versioned files"
+grep -q 'watch) cmd_watch' "$r/usr/libexec/mixtile-update" || fail "mixtile-update has no background check"
+ls "$r"/etc/rc.d/S*mixtile-update >/dev/null 2>&1 || fail "mixtile-update is not enabled at boot"
 grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"
 sed -n '/^\tcluster-box-control-V120)/,/;;/p' "$r/etc/board.d/02_network" | grep -q ':lan"' &&
 	fail "switch defaults of the Cluster Box still have lan ports"
