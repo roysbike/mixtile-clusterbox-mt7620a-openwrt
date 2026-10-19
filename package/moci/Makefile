@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 # upstream add-on feed (key, opkg feed) and the lighttpd parts.
 PKG_NAME:=moci
 PKG_VERSION:=0.2.0
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 PKG_SOURCE_VERSION:=93e01c2cbccff1545716efb4335903d13359b865
 PKG_SOURCE:=moci-$(PKG_SOURCE_VERSION).tar.gz
@@ -52,6 +52,8 @@ define Package/moci/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/rpcd-moci $(1)/usr/libexec/rpcd/moci
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/rpcd-acl.json $(1)/usr/share/rpcd/acl.d/moci.json
 	$(INSTALL_CONF) ./files/moci.config $(1)/etc/config/moci
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/moci-version.init $(1)/etc/init.d/moci-version
 endef
 
 define Package/moci/postinst
