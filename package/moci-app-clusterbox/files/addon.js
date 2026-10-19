@@ -21,6 +21,7 @@ export default class ClusterBoxAddon {
 	}
 
 	async init() {
+		this.checkPassword();
 		// After an access change the browser lands on the new address with
 		// ?cbconfirm=<token>; confirming keeps the change.
 		const params = new URLSearchParams(window.location.search);
@@ -35,6 +36,58 @@ export default class ClusterBoxAddon {
 		} catch (e) {
 			this.core.showToast(`Confirmation failed: ${e.message}`, 'error');
 		}
+	}
+
+	// The factory password of mixtile (mixtile/mixtile): ask for a new one
+	// at login. LATER hides the dialog until the next login.
+	async checkPassword() {
+		try {
+			const st = await this.call('password_state');
+			if (!st.factory || sessionStorage.getItem('cb-pw-later')) return;
+		} catch {
+			return;
+		}
+		const m = document.createElement('div');
+		m.className = 'modal';
+		m.innerHTML = `
+			<div class="modal-backdrop"></div>
+			<div class="modal-content">
+				<div class="modal-header"><h3 class="modal-title">CHANGE THE DEFAULT PASSWORD</h3></div>
+				<div class="modal-body">
+					<p class="cb-muted" style="margin-bottom:16px">The user mixtile still has the factory password. It is used for the web UI,
+					SSH and sudo; root has no password (SSH with a key only).</p>
+					<div class="form-group"><label class="form-label">NEW PASSWORD</label>
+						<input type="password" class="form-input" id="cb-pw-new" autocomplete="new-password"></div>
+					<div class="form-group"><label class="form-label">REPEAT</label>
+						<input type="password" class="form-input" id="cb-pw-rep" autocomplete="new-password"></div>
+				</div>
+				<div class="modal-footer">
+					<button class="action-btn" id="cb-pw-later">LATER</button>
+					<button class="action-btn" id="cb-pw-save">CHANGE PASSWORD</button>
+				</div>
+			</div>`;
+		document.body.appendChild(m);
+		m.querySelector('#cb-pw-later').onclick = () => {
+			try {
+				sessionStorage.setItem('cb-pw-later', '1');
+			} catch {}
+			m.remove();
+		};
+		m.querySelector('#cb-pw-save').onclick = async () => {
+			const pw = m.querySelector('#cb-pw-new').value;
+			if (pw.length < 8) return this.core.showToast('At least 8 characters', 'error');
+			if (pw !== m.querySelector('#cb-pw-rep').value) return this.core.showToast('Passwords do not match', 'error');
+			if (pw === 'mixtile') return this.core.showToast('Choose a password other than the factory one', 'error');
+			try {
+				const [status, res] = await this.core.ubusCall('moci', 'setPassword', { username: 'mixtile', password: pw });
+				if (status !== 0 || !res?.result) throw new Error('setPassword failed');
+				if (this.core.getSavedCredentials?.()) this.core.saveCredentials('mixtile', pw);
+				this.core.showToast('Password changed', 'success');
+				m.remove();
+			} catch (e) {
+				this.core.showToast(`Failed to change the password: ${e.message}`, 'error');
+			}
+		};
 	}
 
 	getExtensions() {
@@ -337,7 +390,7 @@ export default class ClusterBoxAddon {
 			</div>
 			<div class="stat-card"><div class="section-title">SSH</div>
 				${inp('ssh_port', 'SSH PORT', a.ssh_port)}
-				<label class="cb-check"><input type="checkbox" id="cb-ssh_password" ${a.ssh_password !== '0' ? 'checked' : ''}> Password login (off = keys only)</label>
+				<label class="cb-check"><input type="checkbox" id="cb-ssh_password" ${a.ssh_password !== '0' ? 'checked' : ''}> Password login for mixtile (off = keys only; root: keys only)</label>
 				<div class="section-title" style="margin-top:16px">REACHABLE FROM ZONES</div>
 				${zones}
 				<div class="cb-muted">The ports above are rejected on the zones not ticked.</div>

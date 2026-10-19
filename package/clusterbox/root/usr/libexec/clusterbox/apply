@@ -81,7 +81,8 @@ apply_admin() {
 		uset "dropbear.$sec.Port" "$ssh"
 		[ "$pw" = 1 ] && pw=on || pw=off
 		uset "dropbear.$sec.PasswordAuth" "$pw"
-		uset "dropbear.$sec.RootPasswordAuth" "$pw"
+		# root logs in with a key only; the admin user is mixtile (sudo).
+		uset "dropbear.$sec.RootPasswordAuth" off
 	fi
 
 	# LuCI terminal: the ttyd instance that is not the node console one.

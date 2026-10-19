@@ -227,6 +227,17 @@ admin_set() {
 	json_dump
 }
 
+# mixtile still has the factory password (mixtile): the UI asks to change
+# it at login.
+MIXTILE_FACTORY='$1$ambnoHhC$HGFwwM1jpS9IjgwG503Cp/'
+password_state() {
+	local h
+	h=$(awk -F: '$1 == "mixtile" { print $2 }' /etc/shadow)
+	json_init
+	json_add_boolean factory "$([ "$h" = "$MIXTILE_FACTORY" ] && echo 1 || echo 0)"
+	json_dump
+}
+
 pending() {
 	local t d k s
 	json_init
@@ -340,6 +351,7 @@ list)
 		"admin_get": {},
 		"admin_set": { "http_port": "80", "https_port": "443", "redirect_https": "0", "ssh_port": "22", "ssh_password": "1", "terminal_port": "7681", "console_port": "7682", "zones": [] },
 		"pending": {},
+		"password_state": {},
 		"confirm": { "token": "" },
 		"history_list": {},
 		"history_files": { "id": "" },
@@ -364,6 +376,7 @@ call)
 	admin_get) admin_get ;;
 	admin_set) admin_set ;;
 	pending) pending ;;
+	password_state) password_state ;;
 	confirm) confirm ;;
 	history_list) history_list ;;
 	history_files)

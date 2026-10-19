@@ -86,6 +86,15 @@ if grep -q '^mixtile:' /etc/passwd; then
 	chmod 755 /home/mixtile
 fi
 
+# root has no password (SSH with a key only, sudo from mixtile): lock the
+# factory password (root/root) of the images; a password set by the user
+# is kept. "*" never matches a password but, unlike "!", does not lock
+# the account for dropbear key login.
+SHADOW=${CB_SHADOW:-/etc/shadow}
+if grep -q '^root:\$1\$asgYXbPb\$GqMnN2vjVOuEBEVPAXLhR\.:' "$SHADOW"; then
+	sed -i 's/^root:[^:]*:/root:*:/' "$SHADOW"
+fi
+
 # Daily configuration snapshot.
 CRON=${CB_CRON:-/etc/crontabs/root}
 mkdir -p "${CRON%/*}"
