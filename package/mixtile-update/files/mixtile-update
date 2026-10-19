@@ -235,6 +235,11 @@ keep_extra() {
 # This board's sysupgrade writes kernel and rootfs only; the ext4
 # overlay on mmcblk0p3 survives the update as it is. Files the firmware
 # does not ship (packages and tools installed later) are not touched.
+# Whiteouts of uci-defaults scripts go too: the scripts run again after
+# the update, as on other OpenWrt devices (new versions of a script would
+# never run otherwise). The upgrade itself prunes the same way
+# (/lib/upgrade/cluster-box-overlay.sh); this keeps the preview and the
+# order (prune, then sysupgrade) of older firmware.
 # With "preview", only print what would be removed.
 prune_overlay() {
 	local upper=/overlay/upper keep=$WORK/keep.list rm=$WORK/prune.list f
@@ -255,9 +260,6 @@ prune_overlay() {
 		{
 			if ($0 in k) next
 			for (i = 1; i <= np; i++) if (index($0, p[i]) == 1) next
-			# Whiteouts of uci-defaults scripts that already ran: removing
-			# them would run those scripts again on the next boot.
-			if (index($0, "/etc/uci-defaults/") == 1) next
 			print
 		}' |
 	while read -r f; do

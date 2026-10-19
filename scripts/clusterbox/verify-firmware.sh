@@ -131,7 +131,10 @@ sed -n '/^\tcluster-box-control-V120)/,/;;/p' "$r/etc/board.d/02_network" | grep
 	fail "switch defaults of the Cluster Box still have lan ports"
 ok "clusterbox backend, MoCI + ClusterBox add-on, tailscale; network defaults wan + openmiop"
 
-# updates
+# updates; any upgrade prunes the eMMC overlay of the old firmware
+grep -q cluster_box_prune_overlay "$r/lib/upgrade/platform.sh" &&
+	grep -q '^cluster_box_prune_overlay()' "$r/lib/upgrade/cluster-box-overlay.sh" ||
+	fail "upgrade does not prune the overlay (lib/upgrade/cluster-box-overlay.sh)"
 for f in usr/libexec/mixtile-update etc/init.d/mixtile-update; do
 	[ -x "$r/$f" ] || fail "/$f missing"
 done
