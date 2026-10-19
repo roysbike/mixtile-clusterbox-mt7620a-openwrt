@@ -119,6 +119,20 @@ memory, uptime), Internet, the forwarded cluster services (Kubernetes
 API, ingress: answering or not, checked every 30 s with `nodectl probe`)
 and Tailscale.
 
+**Firmware updates in the web UI.** The BMC looks for a new release
+itself (`mixtile-update watch`: 5 min after boot, then every 12 h; only a
+check, nothing is downloaded): a banner then offers it on every page,
+with the release notes, and **UPDATE** downloads, verifies (SHA-256,
+board, signature when keys are set up) and installs it, waits for the BMC
+and reloads the page. **Cluster → Firmware** shows the running firmware
+(version, OpenWrt, kernel, commit, partitions) and the last check.
+Settings: `auto_check`, `check_interval` in `/etc/config/mixtile-update`.
+Development builds (`vX.Y.Z-N-g<sha>`) are never offered a release.
+
+After a firmware update the browser loads the new web files by itself:
+`/www/moci/version.txt`, a hash of them written at boot, is read past the
+cache and goes into every URL (uhttpd sends no Cache-Control).
+
 The LuCI login page, the page footer and Status → Overview show
 `Mixtile ClusterBox · Firmware <version> · commit <sha> · OpenMIOP v<n>`, read
 from `/etc/mixtile-release`.
