@@ -769,14 +769,84 @@ export default class ClusterBoxAddon {
 			if (!box) return clearInterval(this.widgetTimer);
 			try {
 				const t = await this.call('topology');
+				await this.loadAvailability();
 				box.innerHTML = this.topologySvg(t, null, true);
+				this.renderSummary(t);
 			} catch (e) {
 				box.innerHTML = `<div class="cb-muted">${this.esc(e.message)}</div>`;
+				this.renderSummary(null, e.message);
 			}
 		};
 		clearInterval(this.widgetTimer);
 		tick();
 		this.widgetTimer = setInterval(tick, POLL_MS * 2);
+	}
+
+	// Health of the whole box at the top of the dashboard: one tile per
+	// component, coloured by its state; a click opens the cluster page.
+	renderSummary(t, err) {
+		const page = document.getElementById('dashboard-page');
+		if (!page) return;
+		let el = document.getElementById('cb-dash-summary');
+		if (!el) {
+			el = document.createElement('div');
+			el.id = 'cb-dash-summary';
+			el.className = 'cb-sum';
+			el.addEventListener('click', e => e.target.closest('.cb-tile') && this.core.navigate('/cluster'));
+			page.prepend(el);
+		}
+		if (!t) {
+			el.innerHTML = this.tile('bad', 'CLUSTERBOX', 'no data', err || '');
+			return;
+		}
+		const nodes = t.cluster?.nodes || [];
+		const states = nodes.map(n => this.nodeState(n));
+		const online = states.filter(s => s === 'online').length;
+		const level = { online: 'ok', booting: 'warn', busy: 'warn', nolink: 'bad', off: 'off', unknown: 'off' };
+		const worst = states.includes('nolink') ? 'bad' : states.some(s => s !== 'online') ? 'warn' : 'ok';
+		const linked = nodes.filter(n => n.pcie_link).length;
+		const pcie = t.pcie || {};
+		const up = (pcie.uplink || '').split('|');
+		const svc = t.services || [];
+		const svcUp = svc.filter(x => x.up === '1').length;
+		const bmc = t.bmc || {};
+		const mem = bmc.mem_total_kb ? Math.round((1 - bmc.mem_avail_kb / bmc.mem_total_kb) * 100) : null;
+		const load = parseFloat((bmc.load || '').split(' ')[0]);
+		const tiles = [
+			this.tile(nodes.length ? worst : 'off', 'CLUSTER', `${online}/${nodes.length || 4} online`,
+				nodes.length ? `PCIe links ${linked}/${nodes.length}` : 'no node data')
+		];
+		nodes.forEach((n, i) => {
+			const st = states[i];
+			const av = this.availInfo?.[n.id];
+			const dur = av?.since && av.state === st ? ` · ${this.fmtDur(av.now - av.since)}` : '';
+			const pct = av?.pct != null ? ` · ${av.pct >= 99.95 ? '100' : av.pct.toFixed(1)}% 24h` : '';
+			tiles.push(this.tile(level[st] || 'off', (n.name || `blade${n.id}`).toUpperCase(), `${AV_TEXT[st] || st}${dur}`,
+				`${n.ipaddr || `slot ${n.id}`}${pct}`));
+		});
+		tiles.push(
+			this.tile(!pcie.switch ? 'bad' : pcie.omi0 ? 'ok' : 'warn', 'PCIe FABRIC', pcie.switch ? 'ASM2824' : 'no switch',
+				[up[0] ? `uplink ${up[0].replace(' PCIe', '')} x${up[1]}` : '', pcie.omi_driver || 'no omi driver'].filter(Boolean).join(' · ')),
+			this.tile(mem > 90 || load > 4 ? 'warn' : 'ok', 'BMC', `load ${isNaN(load) ? '?' : load.toFixed(2)}`,
+				[mem != null ? `mem ${mem}%` : '', `up ${this.fmtDur(bmc.uptime || 0)}`, bmc.firmware || ''].filter(Boolean).join(' · ')),
+			this.tile(t.internet?.up ? 'ok' : t.wan?.up ? 'warn' : 'bad', 'INTERNET', t.internet?.up ? `${Math.round(t.internet.rtt_ms)} ms` : 'unreachable',
+				`WAN ${t.wan?.ipaddr || t.wan?.fallback || 'no address'}`)
+		);
+		if (svc.length)
+			tiles.push(this.tile(svcUp === svc.length ? 'ok' : svcUp ? 'warn' : 'bad', 'SERVICES', `${svcUp}/${svc.length} up`,
+				svc.some(x => x.up === '0')
+					? `down: ${svc.filter(x => x.up === '0').map(x => x.name).join(', ')}`
+					: svc.map(x => x.name).join(' · ')));
+		if (t.tailscale?.installed)
+			tiles.push(this.tile(t.tailscale.state === 'Running' ? 'ok' : 'off', 'TAILSCALE', t.tailscale.state || 'off', t.tailscale.ipaddr || ''));
+		el.innerHTML = tiles.join('');
+	}
+
+	tile(level, title, value, sub) {
+		return `<div class="stat-card cb-tile ${level}" title="Open the cluster page">
+			<div class="cb-tile-title">${this.esc(title)}</div>
+			<div class="cb-tile-value">${this.esc(value)}</div>
+			${sub ? `<div class="cb-tile-sub">${this.esc(sub)}</div>` : ''}</div>`;
 	}
 
 	// ---- access ------------------------------------------------------------

@@ -74,7 +74,7 @@ netdev_bytes() {
 }
 
 topology() {
-	local ip gw dev up proto sub fb link rx tx inet ts ts_ip sw slink nodes base
+	local ip gw dev up proto sub fb link rx tx inet ts ts_ip sw slink nodes base s dip dport
 
 	network_flush_cache
 	network_get_ipaddr ip wan
@@ -149,6 +149,25 @@ topology() {
 	json_add_double rx_bytes "$rx"
 	json_add_double tx_bytes "$tx"
 	json_close_object
+
+	# Port forwards to the cluster (src_dip_auto: added for the cluster,
+	# e.g. Kubernetes API, ingress): is the target answering?
+	json_add_array services
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([A-Za-z0-9_]*\)=redirect$/\1/p'); do
+		[ "$(uci -q get "firewall.$s.src_dip_auto")" = 1 ] || continue
+		[ "$(uci -q get "firewall.$s.enabled")" = 0 ] && continue
+		dip=$(uci -q get "firewall.$s.dest_ip")
+		dport=$(uci -q get "firewall.$s.dest_port" || uci -q get "firewall.$s.src_dport")
+		case "$dip" in ''|*[!0-9.]*) continue ;; esac
+		case "$dport" in ''|*[!0-9]*) continue ;; esac
+		json_add_object ""
+		json_add_string name "$(uci -q get "firewall.$s.name" || echo "$s")"
+		json_add_string port "$(uci -q get "firewall.$s.src_dport")"
+		json_add_string target "$dip:$dport"
+		json_add_string up "$(cached "svc_$s" "/bin/nodectl probe $dip $dport 1500 && echo 1 || echo 0" 30)"
+		json_close_object
+	done
+	json_close_array
 
 	nodes=$(/bin/nodectl status --json 2>/dev/null)
 	[ -n "$nodes" ] || nodes='{"nodes":[]}'
