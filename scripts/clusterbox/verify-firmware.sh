@@ -185,7 +185,7 @@ ok "LuCI shows $(sed -n 's/^DISTRIB_DESCRIPTION=//p' "$r/etc/openwrt_release")"
 
 # Board drivers and what was left out on purpose
 [ -n "$(find "$r/lib/modules/$KERNEL_VERSION" -name ch343.ko)" ] || fail "ch343.ko (blade consoles) missing"
-for f in etc/init.d/fan-boot usr/bin/picocom usr/bin/sshpass; do
+for f in etc/init.d/fan-boot usr/bin/picocom usr/bin/sshpass sbin/devmem; do
 	[ -e "$r/$f" ] || fail "/$f missing"
 done
 for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd; do
@@ -193,7 +193,7 @@ for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd; do
 done
 [ -z "$(find "$r/lib/modules" -name 'miop.ko' -o -name 'mac80211.ko' -o -name 'cfg80211.ko')" ] ||
 	fail "vendor miop.ko or Wi-Fi modules in the image"
-ok "ch343, fan-boot, picocom, sshpass; no Wi-Fi, PPP or vendor miop.ko"
+ok "ch343, fan-boot, picocom, sshpass, devmem; no Wi-Fi, PPP or vendor miop.ko"
 
 [ "$failed" = 0 ] || die "firmware verification failed"
 echo "firmware verified: $(basename "$image")"
