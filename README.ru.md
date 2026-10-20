@@ -32,18 +32,16 @@ controller, MediaTek MT7620A), — это собственный маленьк�
 
 ![Веб-интерфейс ClusterBox: страница кластера с коробкой спереди](docs/images/web-ui-cluster.jpg)
 
-*Стартовая страница веб-интерфейса (прошивка 25.12): сверху кластер, под
+*Стартовая страница веб-интерфейса (v0.4.0): сверху кластер, под
 ним коробка спереди (BMC, PCIe-коммутатор, слоты 1-4 сверху вниз с
 состоянием, доступностью за 24 часа и кнопками CONSOLE, LOGS и POWER),
 рядом здоровье и трафик.*
 
-Релизы: текущий — **v0.3.0** (OpenWrt 23.05, Linux 5.15; OpenMIOP Stack
-v0.5.0) — [release notes](release-notes/v0.3.0.md),
+Текущий релиз: **v0.4.0** (OpenWrt 25.12.6, Linux 6.12; OpenMIOP Stack
+v0.6.0) — [release notes](release-notes/v0.4.0.md),
 [CHANGELOG.md](CHANGELOG.md),
-[страница релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0).
-Порт на **OpenWrt 25.12.6** (Linux 6.12) с веб-интерфейсом выше —
-в разработке в ветке `claude/openwrt-25.12.6` (v0.4.0) и работает на
-лабораторной коробке.
+[страница релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0).
+Предыдущий релиз v0.3.0 — на OpenWrt 23.05.
 
 ## Оборудование и для кого это
 
@@ -222,9 +220,15 @@ mixtile-update check && mixtile-update download && mixtile-update verify && mixt
 
 > [!WARNING]
 > Обновление перезагружает BMC, а BMC — корневой комплекс PCIe: линки всех
-> блейдов сбрасываются. Блейды на mixtile-talos v0.3.0 сами
-> переподключаются друг к другу за ~12 с и восстанавливают NVMe. После
-> обновления проверьте `nodectl status --all`, etcd и DRBD.
+> блейдов сбрасываются примерно на 150 с, вместе с ними — весь трафик подов
+> между блейдами. Перед обновлением: DRBD без `out-of-sync`
+> ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153)), у
+> CloudNativePG выключить проверку изоляции primary
+> (`spec.probes.liveness.isolationCheck.enabled: false`, после обновления
+> включить обратно), сделать резервную копию настроек. После обновления
+> проверьте `nodectl status --all`, etcd, DRBD и базы данных.
+> С v0.3.0 (OpenWrt 23.05) переход — смена базы: проверьте проброс
+> портов и порты управления, см. [release notes v0.4.0](release-notes/v0.4.0.md).
 
 ## Если BMC не загрузился после обновления
 

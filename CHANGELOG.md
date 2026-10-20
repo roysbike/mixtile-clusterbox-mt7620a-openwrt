@@ -6,8 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
+The firmware on OpenWrt 25.12.6 (Linux 6.12.112) with a new web UI, the
+BMC part of OpenMIOP Stack v0.6.0. Runs on the lab Cluster Box since
+2026-10-19 (development builds, every one flashed and checked with four
+blades).
+
+### Changed
+
+- Base: OpenWrt 25.12.6 (25.12.5 in rc.1, which did not boot: the old SD
+  driver failed CMD48; the upstream `mtk-sd` driver works). Boots through
+  the lzma loader; the upgrade prunes the eMMC overlay of the old firmware.
+- `omi-rc`/`openmiop` from pcie-ep-net
+  [v0.6.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.0)
+  (`omi-rc` as in v0.5.2: it enables memory and bus mastering on the
+  ASM2824 ports, which Linux 6.12 leaves off; without it no blade
+  connects).
+- Network layout: `wan` (1G jack) and `openmiop` (omi0), no LAN bridge.
+- Login `mixtile` (asked to change the factory password at the first
+  login), root without a password (SSH keys only).
+- The BMC gateway is 10-20 % slower than on 23.05 (Linux 6.12 network
+  stack on the MIPS core).
+
 ### Added
 
+- Web UI (MoCI, patched for the box), three pages, every setting in one
+  place:
+  - CLUSTER: the cluster (name, description, role of every slot), the
+    box from the front (BMC, PCIe switch, slots 1-4 with LEDs, state,
+    24 h availability, CONSOLE, LOGS, POWER), health, traffic.
+  - NETWORK: TOPOLOGY (live diagram of the box's networks), INTERFACES
+    (+ WAN fallback address), FIREWALL, DHCP & DNS (+ DNS/DHCP/names for
+    the blades), ROUTES, DEVICES, TAILSCALE, WIREGUARD, OPENVPN,
+    DIAGNOSTICS.
+  - SYSTEM: GENERAL (+ NTP for the blades, reboot), ACCESS (ports, zones,
+    password; changes roll back unless confirmed), FIRMWARE (updates
+    from GitHub with release notes, manual upload in 32 KiB chunks),
+    BACKUP (progress, configuration history), SOFTWARE (apk), STARTUP
+    (enabled at boot), LOGS, SCHEDULED TASKS, SSH KEYS, STORAGE.
+  - Login page with the firmware version and a link to its release;
+    web files versioned, so the browser picks up a new firmware.
+- Console archive on the eMMC: every boot of every blade in its own
+  file, LOGS viewer (read from boot, follow, search, download).
+- Node availability log (`availwatch`) and 24 h bars.
+- Background release check (`mixtile-update watch`, every 12 h) with an
+  update banner.
+- OpenVPN server for remote access (self-signed certificates pinned by
+  fingerprint, one .ovpn per client) and outgoing OpenVPN connections
+  from uploaded .ovpn files; WireGuard; Tailscale.
+- DHCP on omi0 by default (10.20.0.20-99, gateway, DNS and NTP the BMC).
+- `nodectl probe` (TCP check for the forwarded services).
 - Documentation: the BMC's serial console (3-pin UART header TX/RX/GND,
   57600 8N1 per Mixtile, kernel console 115200), with Mixtile's pinout
   PDF; README EN/RU.
@@ -24,6 +73,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   update.
 - Documentation: known v0.3.0 issue, `/home/mixtile` belongs to root
   (`mixtile` cannot create `~/.ssh`).
+- MoCI firmware upload (uhttpd takes at most 64 KiB per /ubus request),
+  network activity graph (units, VLAN double count), STARTUP (enabled
+  state from procd's rc), SOFTWARE (apk on 25.12).
 
 ## [0.4.0-rc.1] - 2026-10-14
 

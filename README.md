@@ -32,18 +32,16 @@ the BMC into the one place from which the whole box is run:
 
 ![ClusterBox web UI: the cluster page with the box from the front](docs/images/web-ui-cluster.jpg)
 
-*The start page of the web UI (25.12 firmware): the cluster at the top, the
+*The start page of the web UI (v0.4.0): the cluster at the top, the
 box from the front below it (the BMC, the PCIe switch, slots 1-4 from top to
 bottom with their state, 24 h availability and CONSOLE, LOGS and POWER),
 health and traffic beside it.*
 
-Releases: **v0.3.0** is the current release (OpenWrt 23.05, Linux 5.15;
-OpenMIOP Stack v0.5.0) — [release notes](release-notes/v0.3.0.md),
+Current release: **v0.4.0** (OpenWrt 25.12.6, Linux 6.12; OpenMIOP Stack
+v0.6.0) — [release notes](release-notes/v0.4.0.md),
 [CHANGELOG.md](CHANGELOG.md),
-[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0).
-The port to **OpenWrt 25.12.6** (Linux 6.12) with the web UI above is in
-development on the branch `claude/openwrt-25.12.6` (v0.4.0); it runs on the
-lab box.
+[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0).
+The previous release v0.3.0 is on OpenWrt 23.05.
 
 ## Hardware and who this is for
 
@@ -98,7 +96,7 @@ single Blade 3) and want:
 | Protocol | OpenMIOP v4 between blades (per-connection doorbell, multiqueue, checksum offload), push mode, gateway pull and zero-copy to the BMC |
 | Blade driver, BMC module | [pcie-ep-net v0.6.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.0) (`omi-rc` as in v0.5.2) |
 | Blade OS | [mixtile-talos v0.6.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.0) |
-| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.3.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0) (this repository); the 25.12 firmware in development carries `omi-rc` v0.5.2 |
+| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.4.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0) (this repository) |
 
 The blades run the endpoint driver (`openmiop-ep.ko`, ARM64; not part of this
 firmware). The BMC runs the `omi-rc` kernel module (push mode: the blades
@@ -411,25 +409,21 @@ MIXTILE_FW_VERSION=$(git describe --tags --always) ./build.sh firmware
 
 Feeds are pinned to commits in `feeds.conf.default`.
 
-## Known limitations (v0.3.0)
+## Known limitations (v0.4.0)
 
-* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~280 Mbit/s
-  LAN -> blade with zero-copy, ~195 with gateway pull only, ~90 without;
-  ~250-270 blade -> LAN); a
-  BMC reboot can force-demote a DRBD 9.3.4 Primary on the blades if a
+* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~220-245
+  Mbit/s each way on Linux 6.12, 10-20 % below 23.05). A BMC reboot
+  resets every blade link for ~150 s: on Blade 3 also the M.2 NVMe
+  (mixtile-talos recovers it), DRBD 9.3.4 can force-demote a Primary if a
   Secondary holds stale out-of-sync bits
-  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153)): check
-  `out-of-sync:` 0 before rebooting the BMC; a BMC
-  reboot resets every blade link (on Blade 3 also the M.2 NVMe, which
-  mixtile-talos v0.3.0 recovers); with the fallback helper, root-port
-  re-enumeration pauses fabric traffic ~1-2 s and a blade that
-  disappears without the leave handshake can race a BMC read and wedge
-  the fabric (`omi-rc` never reads a blade). Full list:
+  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153), check
+  `out-of-sync:` 0 first), and CloudNativePG's primary isolation check
+  fails a primary over unless it is turned off for the reboot. Full list:
   [pcie-ep-net](https://github.com/roysbike/pcie-ep-net#known-limitations).
+* Packages: kernel modules from the OpenWrt feeds only install when they
+  match the firmware's kernel.
 * Updates: releases not signed; no A/B rootfs (a firmware that does not
   boot needs the factory restore with the reset button, see Recovery).
-* v0.3.0 image: `/home/mixtile` belongs to root, so `mixtile` cannot
-  create `~/.ssh`. Fix once: `chown mixtile:mixtile /home/mixtile`.
 
 ---
 
