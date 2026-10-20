@@ -19,7 +19,6 @@ NETWORK, SYSTEM; every setting in one place):
 - Extension point "tab:section": add-ons put sections into a tab of
   the network and system pages.
 - ACL: rc list and rc init.
-
 --- a/moci/index.html
 +++ b/moci/index.html
 @@ -3,7 +3,7 @@
@@ -661,11 +660,13 @@ NETWORK, SYSTEM; every setting in one place):
  			try {
  				await this.core.ubusCall('file', 'exec', { command: '/bin/rm', params: ['-f', '/tmp/backup.tar.gz'] });
  			} catch {}
-@@ -302,15 +324,16 @@
+@@ -302,15 +324,18 @@
  		});
  	}
  
 +	// Init scripts from procd's rc object: enabled at boot and running.
++	// "Not running" is neutral: one-shot services (firewall, gpio_switch)
++	// load their settings and leave no process behind.
  	async loadStartup() {
  		await this.core.loadResource('services-table', 4, 'services', async () => {
 -			const [status, result] = await this.core.ubusCall('service', 'list', {});
@@ -683,13 +684,13 @@ NETWORK, SYSTEM; every setting in one place):
  
  			this.core.renderTable(
  				'#services-table',
-@@ -319,12 +342,15 @@
+@@ -319,12 +344,15 @@
  				'No services found',
  				s => `<tr>
  				<td>${this.core.escapeHtml(s.name)}</td>
 -				<td>${s.running ? this.core.renderBadge('success', 'RUNNING') : this.core.renderBadge('error', 'STOPPED')}</td>
 -				<td>${this.core.renderBadge('info', 'N/A')}</td>
-+				<td>${s.running === undefined ? '<span style="color:var(--steel-muted)">—</span>' : s.running ? this.core.renderBadge('success', 'RUNNING') : this.core.renderBadge('error', 'STOPPED')}</td>
++				<td>${s.running === undefined ? '<span style="color:var(--steel-muted)">—</span>' : s.running ? this.core.renderBadge('success', 'RUNNING') : this.core.renderBadge('info', 'NOT RUNNING')}</td>
 +				<td>${s.enabled ? this.core.renderBadge('success', 'ENABLED') : this.core.renderBadge('warning', 'DISABLED')}</td>
  				<td>
  					<div class="action-buttons">
@@ -702,7 +703,7 @@ NETWORK, SYSTEM; every setting in one place):
  						</button>
  					</div>
  				</td>
-@@ -333,27 +359,31 @@
+@@ -333,27 +361,31 @@
  		});
  	}
  
