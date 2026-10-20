@@ -1,28 +1,59 @@
-# Прошивка BMC Mixtile ClusterBox (OpenWrt, MT7620A)
+# Прошивка BMC Mixtile Cluster Box (OpenWrt, MT7620A)
 
 [English](README.md) · [Русский](README.ru.md)
 
-Прошивка для управляющего контроллера (BMC) **Mixtile Cluster Box**:
-OpenWrt 23.05 (ядро 5.15.150) на MediaTek MT7620A. В ней управление
-четырьмя слотами Blade 3 (`nodectl` и LuCI), сторона BMC для **OpenMIOP**
-(Ethernet между блейдами по внутренней PCIe-фабрике: модуль ядра `omi-rc`,
-программа `openmiop-rc` как запасной вариант), файл с версией прошивки и
-обновление из GitHub Releases.
+В **Mixtile Cluster Box** стоят четыре вычислительные платы **Mixtile
+Blade 3**. Управляющая плата коробки, **BMC** (baseboard management
+controller, MediaTek MT7620A), — это собственный маленький компьютер
+шасси: он работает всегда, пока на коробку подано питание, что бы ни
+происходило с блейдами. Этот репозиторий — открытая прошивка OpenWrt для
+этого BMC. Она заменяет прошивку Mixtile и делает BMC единым местом, из
+которого управляется вся коробка:
 
-Текущий релиз: **v0.3.0** (OpenMIOP Stack v0.5.0: gateway pull с
-zero-copy — трафик из LAN к блейдам примерно в 3 раза быстрее, чем в
-v0.1; flow offloading включён по умолчанию) — см.
-[release notes](release-notes/v0.3.0.md), [CHANGELOG.md](CHANGELOG.md) и
-[страницу релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0).
+* **Питание и консоли блейдов.** Включить, выключить, перезагрузить
+  каждый блейд, открыть его последовательную консоль в браузере и потом
+  прочитать любую загрузку любого блейда: консоли записываются на
+  накопитель BMC.
+* **PCIe-фабрика.** BMC — корневой комплекс PCIe коробки. Его модуль
+  `omi-rc` поднимает **OpenMIOP** — Ethernet между блейдами через
+  внутренний PCIe-коммутатор (`omi0`, 7-8 Гбит/с на поток между
+  блейдами; этот трафик идёт через коммутатор и BMC не касается).
+* **Сетевой край кластера.** Блейды выходят в LAN и интернет через BMC
+  (NAT, DNS и NTP для блейдов), а сервисы кластера (Kubernetes API,
+  ingress) пробрасываются с WAN-адреса BMC.
+* **Удалённый доступ** к коробке и кластеру: Tailscale, WireGuard и
+  OpenVPN, SSH и веб-интерфейс с защитой, которая откатывает изменение
+  доступа, если оно отрезало бы вас от BMC.
+* **Наблюдение за коробкой**: какие блейды работают и сколько (история за
+  24 часа), фабрика, uplink, проброшенные сервисы, вентилятор и питание.
+* **Собственные обновления**: BMC сам ищет новую прошивку в GitHub
+  Releases, показывает, что изменилось, и ставит её из веб-интерфейса;
+  блейды в это время продолжают работать.
+
+![Веб-интерфейс ClusterBox: страница кластера с коробкой спереди](docs/images/web-ui-cluster.jpg)
+
+*Стартовая страница веб-интерфейса (прошивка 25.12): сверху кластер, под
+ним коробка спереди (BMC, PCIe-коммутатор, слоты 1-4 сверху вниз с
+состоянием, доступностью за 24 часа и кнопками CONSOLE, LOGS и POWER),
+рядом здоровье и трафик.*
+
+Релизы: текущий — **v0.3.0** (OpenWrt 23.05, Linux 5.15; OpenMIOP Stack
+v0.5.0) — [release notes](release-notes/v0.3.0.md),
+[CHANGELOG.md](CHANGELOG.md),
+[страница релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0).
+Порт на **OpenWrt 25.12.6** (Linux 6.12) с веб-интерфейсом выше —
+в разработке в ветке `claude/openwrt-25.12.6` (v0.4.0) и работает на
+лабораторной коробке.
 
 ## Оборудование и для кого это
 
 **Mixtile Cluster Box** — компактное шасси на четыре платы **Mixtile
 Blade 3**. Внутри:
 
-* управляющий контроллер (BMC): MediaTek MT7620A (MIPS) с OpenWrt. Он
-  включает, выключает и перезагружает блейды, даёт доступ к их
-  последовательным консолям и служит корневым комплексом PCIe всего шасси;
+* BMC: MediaTek MT7620A (MIPS 24KEc, 580 МГц, 256 МБ ОЗУ) с распаянным
+  eMMC, WAN-портом 1 Гбит/с, вентиляторами и USB-UART адаптерами консолей
+  четырёх блейдов. Он включает, выключает и перезагружает блейды и служит
+  корневым комплексом PCIe всего шасси;
 * PCIe-коммутатор ASMedia ASM2824 (Gen3): линк Gen3 x2 к каждому слоту и
   линк Gen1 x1 к BMC.
 
@@ -38,37 +69,42 @@ Blade 3), которым нужно:
 
 | Что нужно | Репозиторий |
 | --- | --- |
-| Ethernet между блейдами через PCIe-коммутатор (`omi0`, ~5 Гбит/с на поток, ~25 Гбит/с при четырёх отправителях) | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) |
+| Ethernet между блейдами через PCIe-коммутатор (`omi0`, 7-8 Гбит/с на поток, ~25 Гбит/с при четырёх отправителях) | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) |
 | Talos Linux (Kubernetes) на Blade 3, в Cluster Box или отдельно | [mixtile-talos](https://github.com/roysbike/mixtile-talos) |
-| Свежий OpenWrt на BMC: питание и консоли блейдов, обновление прошивки, сторона OpenMIOP на BMC | [mixtile-clusterbox-mt7620a-openwrt](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt) (этот репозиторий) |
+| Свежий OpenWrt на BMC: питание и консоли блейдов, PCIe-фабрика, сетевой край кластера, удалённый доступ, обновления прошивки | [mixtile-clusterbox-mt7620a-openwrt](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt) (этот репозиторий) |
 
+## Где стоит BMC
+
+```
+        LAN / интернет
+              |
+   WAN 1 Гбит/с (DHCP)          удалённый доступ: Tailscale, WireGuard, OpenVPN
+              |
+  +--------------------------------------------------------+
+  |  BMC  MT7620A, OpenWrt (эта прошивка)                  |
+  |   веб-интерфейс, SSH, nodectl (питание, консоли, логи) |
+  |   NAT, DNS, NTP для блейдов, проброс портов            |
+  |   omi-rc: omi0 10.20.0.1/24, шлюз блейдов              |
+  +--------------------------------------------------------+
+        | PCIe Gen1 x1 (управление + шлюз)
+   PCIe-коммутатор ASM2824   (трафик между блейдами остаётся здесь)
+     |         |         |         |      Gen3 x2 к каждому
+  слот 1    слот 2    слот 3    слот 4    Blade 3 (RK3588), omi0 10.20.0.x
+```
 
 ## Что в прошивке
 
 | Пакет | Что делает |
 | --- | --- |
-| `kmod-omi-rc` | `omi-rc.ko`, сторона OpenMIOP на BMC в push-режиме (журнал: `dmesg \| grep omi0`) |
-| `openmiop` | `/etc/init.d/openmiop`: грузит `omi-rc`, при неудаче запускает `openmiop-rc` |
-| `nodectl`, `luci-app-nodectl` | питание, сброс, консоль, прошивка и PXE блейдов; меню LuCI **Cluster** |
-| `mixtile-update`, `luci-app-mixtile-update` | поиск, загрузка, проверка SHA-256 и установка обновлений; LuCI **System → Firmware Update** |
+| `kmod-omi-rc`, `openmiop` | сторона OpenMIOP на BMC: `omi-rc.ko` (журнал: `dmesg \| grep omi0`), `/etc/init.d/openmiop`, запасной `openmiop-rc` и `omi-peek` из pcie-ep-net |
+| `nodectl`, `luci-app-nodectl` | питание, сброс, консоли блейдов (терминал в браузере), архив консолей, PXE и прошивка блейдов; меню LuCI **Cluster** |
+| `clusterbox` | настройки BMC (`/etc/config/clusterbox`): доступ к управлению с защитой от отката, запасной адрес WAN, DNS и NTP для блейдов, постоянный журнал, история конфигурации, журнал доступности нод, описание кластера, состояние прошивки; backend веб-интерфейса в rpcd |
+| `moci`, `moci-app-clusterbox` | веб-интерфейс (MoCI) со страницами ClusterBox: CLUSTER (стартовая), ACCESS, SERVICES, CONFIG HISTORY, TAILSCALE, FIRMWARE; LuCI остаётся на `/cgi-bin/luci` |
 | `mixtile-release` | `/etc/mixtile-release`: версия, коммит, дата сборки, протокол OpenMIOP |
+| `mixtile-update`, `luci-app-mixtile-update` | поиск, загрузка, проверка и установка обновлений из GitHub Releases, фоновая проверка |
+| Tailscale, WireGuard, OpenVPN | удалённый доступ (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` со страницами LuCI) |
 
-### Логи консолей и доступность нод (порт на 25.12)
-
-Последовательная консоль каждого блейда (USB-UART CH343 на BMC,
-1,5 Мбод) записывается `nodectl consoled` на eMMC BMC, по файлу на каждую
-загрузку блейда: `/overlay/log/nodectl/nodeN/YYYYmmdd-HHMMSS.log` (длинная
-загрузка продолжается в частях `.pNNN.log` по `console_archive_part_mb`),
-каждая строка с временем BMC. Новый файл начинается при включении или
-сбросе через `nodectl`, по баннеру U-Boot или ядра и когда отметки
-времени ядра идут назад (блейд перезагрузился сам). Самые старые
-загрузки удаляются сверх `console_archive_mb` (512) или
-`console_archive_boots` (100) на блейд; настройки в `/etc/config/nodectl`.
-Архив лежит вне upper-каталога overlay, обновление прошивки его не трогает.
-
-`availwatch` (пакет `clusterbox`) каждые 20 с проверяет, есть ли у блейда
-питание, PCIe-линк и отвечает ли он на проверочный порт, и записывает
-каждое изменение в `/overlay/log/clusterbox/availability`.
+### Веб-интерфейс
 
 **Веб-интерфейс открывается на странице CLUSTER** (dashboard самого BMC
 от MoCI — в разделе **BMC**):
@@ -111,6 +147,23 @@ Blade 3), которым нужно:
 интерфейса: `/www/moci/version.txt`, хеш файлов, который пишется при
 загрузке, читается в обход кеша и подставляется во все адреса (uhttpd
 не отдаёт Cache-Control).
+
+### Логи консолей и доступность
+
+Последовательная консоль каждого блейда (USB-UART CH343 на BMC,
+1,5 Мбод) записывается `nodectl consoled` на eMMC BMC, по файлу на каждую
+загрузку блейда: `/overlay/log/nodectl/nodeN/YYYYmmdd-HHMMSS.log` (длинная
+загрузка продолжается в частях `.pNNN.log` по `console_archive_part_mb`),
+каждая строка с временем BMC. Новый файл начинается при включении или
+сбросе через `nodectl`, по баннеру U-Boot или ядра и когда отметки
+времени ядра идут назад (блейд перезагрузился сам). Самые старые
+загрузки удаляются сверх `console_archive_mb` (512) или
+`console_archive_boots` (100) на блейд; настройки в `/etc/config/nodectl`.
+Архив лежит вне upper-каталога overlay, обновление прошивки его не трогает.
+
+`availwatch` (пакет `clusterbox`) каждые 20 с проверяет, есть ли у блейда
+питание, PCIe-линк и отвечает ли он на проверочный порт, и записывает
+каждое изменение в `/overlay/log/clusterbox/availability`.
 
 ## Установка и обновление
 
