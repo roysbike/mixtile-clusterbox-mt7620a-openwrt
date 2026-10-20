@@ -123,7 +123,8 @@ for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/cl
 	etc/uci-defaults/80-clusterbox-network etc/uci-defaults/81-clusterbox \
 	usr/share/rpcd/acl.d/clusterbox.json www/moci/index.html www/moci/js/core.js \
 	usr/libexec/rpcd/moci www/moci/js/addons/cluster/manifest.json www/moci/js/addons/cluster/addon.js \
-	www/cluster.html usr/sbin/tailscaled usr/sbin/openvpn usr/bin/wg; do
+	www/cluster.html www/luci-static/resources/view/clusterbox/moci.js usr/share/luci/menu.d/moci-app-clusterbox.json \
+	usr/sbin/tailscaled usr/sbin/openvpn usr/bin/wg; do
 	[ -e "$r/$f" ] || fail "/$f missing"
 done
 # Web files reach the browser with a version (moci-version); the firmware

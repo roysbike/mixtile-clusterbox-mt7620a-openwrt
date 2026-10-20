@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- LuCI: menu entry **ClusterBox UI** (next to Logout) that opens the main
+  web UI (MoCI, `/moci/`); MoCI has its own session and may ask to log in.
 - `devmem` (busybox) for reading SoC registers on the console, e.g. the
   MT7620A GPIO mode, data and direction registers while finding out what
   drives the OCuLink lane-0 mux. Only reads are meant: a write to the
