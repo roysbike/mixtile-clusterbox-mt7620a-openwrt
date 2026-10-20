@@ -20,7 +20,10 @@
 						"info_get",
 						"ovpn_list",
 						"ovpn_log",
-						"ovpn_client_get"
+						"ovpn_client_get",
+						"pkg_list",
+						"pkg_search",
+						"pkg_status"
 				],
 				"nodectl": [
 					"status",
@@ -69,7 +72,8 @@
 						"ovpn_client_del",
 						"ovpn_import",
 						"ovpn_enable",
-						"ovpn_delete"
+						"ovpn_delete",
+						"pkg_job"
 				],
 				"nodectl": [
 					"action",

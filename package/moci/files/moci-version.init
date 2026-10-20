@@ -3,11 +3,24 @@
 # the browser cache and puts it into every URL, so a firmware update (or
 # an add-on installed later: "/etc/init.d/moci-version start") is seen at
 # once. Written only when it changes.
+# /www/moci/firmware.json: version, commit, OpenWrt and the repository
+# from /etc/mixtile-release, for the login page (no session needed).
 
 START=49
 
+firmware_json() {
+	local FIRMWARE_VERSION GIT_COMMIT OPENWRT_VERSION REPOSITORY repo j
+	[ -f /etc/mixtile-release ] || return 0
+	. /etc/mixtile-release
+	repo=${REPOSITORY#https://github.com/}
+	j=$(printf '{"version":"%s","commit":"%s","openwrt":"%s","repository":"%s"}' \
+		"$FIRMWARE_VERSION" "$GIT_COMMIT" "$OPENWRT_VERSION" "$repo" | tr -d '\\')
+	[ "$(cat /www/moci/firmware.json 2>/dev/null)" = "$j" ] || echo "$j" > /www/moci/firmware.json
+}
+
 start() {
 	local v
+	firmware_json
 	v=$(find /www/moci -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.json' \) |
 		sort | xargs cat 2>/dev/null | md5sum | cut -c1-12)
 	[ -n "$v" ] || return 0

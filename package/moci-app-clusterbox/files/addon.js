@@ -2,14 +2,15 @@
 // access, services for the blades, configuration history, Tailscale.
 // Backend: ubus objects "clusterbox" (package clusterbox) and "nodectl".
 
-const TABS = [
-	['overview', 'OVERVIEW'],
-	['access', 'ACCESS'],
-	['services', 'SERVICES'],
-	['history', 'CONFIG HISTORY'],
-	['tailscale', 'TAILSCALE'],
-	['firmware', 'FIRMWARE']
-];
+// The cluster page has no tabs any more; its old tabs moved to the
+// network and system pages (old links still work).
+const MOVED = {
+	access: '/system/admin',
+	services: '/network/dhcp',
+	history: '/system/backup',
+	tailscale: '/network/tailscale',
+	firmware: '/system/upgrade'
+};
 const POLL_MS = 5000;
 // How often an open page looks at the result of the BMC's own background
 // release check (mixtile-update watch); this reads local state only.
@@ -108,11 +109,25 @@ export default class ClusterBoxAddon {
 	}
 
 	// Two tabs on the MoCI network page.
+	// Tabs and sections on the MoCI network and system pages.
 	getExtensions() {
+		const sec = (id, page, tab, render, position = 'bottom') => ({ id, page, tab, position, render });
 		return {
 			'network:tab': [
-				{ id: 'topology', label: 'TOPOLOGY', after: 'interfaces', render: el => this.renderTopology(el) },
+				{ id: 'topology', label: 'TOPOLOGY', before: 'interfaces', render: el => this.renderTopology(el) },
+				{ id: 'tailscale', label: 'TAILSCALE', before: 'vpn', render: el => this.loadTailscale(el) },
 				{ id: 'openvpn', label: 'OPENVPN', after: 'vpn', render: el => this.renderOpenvpn(el) }
+			],
+			'tab:section': [
+				sec('cb-wan', 'network', 'interfaces', el => this.loadServices(el, ['wan'])),
+				sec('cb-dns', 'network', 'dhcp', el => this.loadServices(el, ['dns']), 'top'),
+				sec('cb-time', 'system', 'general', el => this.loadServices(el, ['ntp'])),
+				sec('cb-access', 'system', 'admin', el => this.loadAccess(el), 'top'),
+				sec('cb-firmware', 'system', 'upgrade', el => this.loadFirmware(el), 'top'),
+				sec('cb-history', 'system', 'backup', el => this.loadHistory(el)),
+				sec('cb-history-set', 'system', 'backup', el => this.loadServices(el, ['history'])),
+				sec('cb-software', 'system', 'software', el => this.loadSoftware(el)),
+				sec('cb-log', 'system', 'logs', el => this.loadServices(el, ['log']), 'top')
 			]
 		};
 	}
@@ -166,28 +181,12 @@ export default class ClusterBoxAddon {
 
 	route(sub) {
 		this.stopPolling();
-		const tab = TABS.some(t => t[0] === sub[0]) ? sub[0] : 'overview';
+		if (MOVED[sub[0]]) return this.core.navigate(MOVED[sub[0]]);
 		const page = this.page();
 		if (!page) return;
-		page.innerHTML = `<h2>CLUSTERBOX</h2>
-			<div class="tabs">${TABS.map(
-				([id, label]) => `<button class="tab-btn${id === tab ? ' active' : ''}" data-cbtab="${id}">${label}</button>`
-			).join('')}</div>
-			<div id="cb-pending"></div>
-			<div id="cb-body"></div>`;
-		page.querySelectorAll('[data-cbtab]').forEach(btn =>
-			btn.addEventListener('click', () => this.core.navigate(`/cluster/${btn.dataset.cbtab}`))
-		);
+		page.innerHTML = '<div id="cb-pending"></div><div id="cb-body"></div>';
 		this.showPending();
-		const handlers = {
-			overview: () => this.loadOverview(),
-			access: () => this.loadAccess(),
-			services: () => this.loadServices(),
-			history: () => this.loadHistory(),
-			tailscale: () => this.loadTailscale(),
-			firmware: () => this.loadFirmware()
-		};
-		handlers[tab]();
+		this.loadOverview();
 	}
 
 	async showPending() {
@@ -1020,6 +1019,129 @@ export default class ClusterBoxAddon {
 		}
 	}
 
+	// ---- software (SYSTEM > SOFTWARE, apk) ---------------------------------
+
+	// "name-version arch {origin} (license) [installed]" lines of apk list.
+	pkgParse(text) {
+		return String(text || '')
+			.split('\n')
+			.map(l => l.match(/^(.+?)-(\d\S*)\s+(\S+)?.*?(\[installed\])?$/))
+			.filter(Boolean)
+			.map(m => ({ name: m[1], version: m[2], installed: !!m[4] }));
+	}
+
+	async loadSoftware(el) {
+		this.swEl = el;
+		el.innerHTML = `<div class="stat-card"><div class="section-title">PACKAGES (APK)</div>
+				<p class="cb-muted" style="margin-bottom:12px">Packages from the OpenWrt ${this.esc(this.fw?.openwrt || '')} feeds for this board.
+					Kernel modules only install if they match the firmware's kernel; core packages of the BMC cannot be removed here.</p>
+				<div class="cb-node-actions">
+					<button class="action-btn-sm" data-sw="update">UPDATE PACKAGE LISTS</button>
+					<input class="form-input cb-sw-q" id="cb-sw-q" placeholder="search the feeds, e.g. htop" maxlength="40">
+					<button class="action-btn-sm" data-sw="search">SEARCH</button>
+				</div>
+				<div class="cb-sw-job" id="cb-sw-job" hidden>
+					<div class="progress-bar"><div class="progress-fill busy" id="cb-sw-fill" style="width:100%"></div></div>
+					<div class="cb-muted" id="cb-sw-state"></div>
+					<pre class="cb-logs-text cb-sw-log" id="cb-sw-log"></pre>
+				</div>
+				<div id="cb-sw-results"></div></div>
+			<div class="stat-card" style="margin-top:16px"><div class="section-title">INSTALLED</div>
+				<input class="form-input cb-sw-q" id="cb-sw-filter" placeholder="filter" style="margin-bottom:10px">
+				<div id="cb-sw-installed" class="cb-muted">Loading…</div></div>`;
+		const q = id => el.querySelector(id);
+		el.querySelectorAll('[data-sw]').forEach(b => (b.onclick = () => this.swAction(b.dataset.sw)));
+		q('#cb-sw-q').onkeydown = e => e.key === 'Enter' && this.swAction('search');
+		q('#cb-sw-filter').oninput = () => this.swRenderInstalled();
+		try {
+			this.swInstalled = this.pkgParse((await this.call('pkg_list')).text);
+		} catch (e) {
+			q('#cb-sw-installed').textContent = e.message;
+			return;
+		}
+		this.swRenderInstalled();
+		this.swPoll(true);
+	}
+
+	swRenderInstalled() {
+		const el = this.swEl;
+		const box = el?.querySelector('#cb-sw-installed');
+		if (!box) return;
+		const f = el.querySelector('#cb-sw-filter').value.trim().toLowerCase();
+		const list = (this.swInstalled || []).filter(p => !f || p.name.includes(f));
+		box.classList.remove('cb-muted');
+		box.innerHTML = `<div class="cb-muted" style="margin-bottom:6px">${list.length} of ${(this.swInstalled || []).length} packages</div>
+			<table class="data-table"><thead><tr><th>PACKAGE</th><th>VERSION</th><th></th></tr></thead><tbody>
+			${list.map(p => `<tr><td>${this.esc(p.name)}</td><td class="cb-mono">${this.esc(p.version)}</td>
+				<td><button class="action-btn-sm danger" data-rm="${this.esc(p.name)}">REMOVE</button></td></tr>`).join('')}
+			</tbody></table>`;
+		box.querySelectorAll('[data-rm]').forEach(b => (b.onclick = () => this.swJob('remove', b.dataset.rm)));
+	}
+
+	async swAction(act) {
+		const el = this.swEl;
+		if (act === 'update') return this.swJob('update', '');
+		const text = el.querySelector('#cb-sw-q').value.trim();
+		const out = el.querySelector('#cb-sw-results');
+		try {
+			const found = this.pkgParse((await this.call('pkg_search', { q: text })).text);
+			const have = new Set((this.swInstalled || []).map(p => p.name));
+			out.innerHTML = found.length
+				? `<table class="data-table" style="margin-top:12px"><thead><tr><th>PACKAGE</th><th>VERSION</th><th></th></tr></thead><tbody>
+					${found.map(p => `<tr><td>${this.esc(p.name)}</td><td class="cb-mono">${this.esc(p.version)}</td>
+						<td>${have.has(p.name) ? this.core.renderBadge('success', 'INSTALLED')
+							: `<button class="action-btn-sm" data-in="${this.esc(p.name)}">INSTALL</button>`}</td></tr>`).join('')}
+					</tbody></table>`
+				: `<div class="cb-muted" style="margin-top:12px">Nothing found for "${this.esc(text)}" (UPDATE PACKAGE LISTS first if the lists are old).</div>`;
+			out.querySelectorAll('[data-in]').forEach(b => (b.onclick = () => this.swJob('install', b.dataset.in)));
+		} catch (e) {
+			this.core.showToast(e.message, 'error');
+		}
+	}
+
+	async swJob(action, name) {
+		if (action === 'remove' && !confirm(`Remove ${name}?`)) return;
+		try {
+			await this.call('pkg_job', { action, name });
+		} catch (e) {
+			return this.core.showToast(e.message, 'error');
+		}
+		this.swPoll();
+	}
+
+	// Job progress: the apk log every 2 s until the job ends.
+	async swPoll(quiet) {
+		clearTimeout(this.swTimer);
+		const el = this.swEl;
+		if (!el?.isConnected) return;
+		let st;
+		try {
+			st = (await this.call('pkg_status')).text || '';
+		} catch {
+			return;
+		}
+		const [head, ...log] = st.split('\n');
+		const [state, action, name] = head.split(' ');
+		const job = el.querySelector('#cb-sw-job');
+		if (state === 'idle' || (quiet && state !== 'running')) return;
+		job.hidden = false;
+		const what = action === 'update' ? 'Updating the package lists' : `${action === 'install' ? 'Installing' : 'Removing'} ${name}`;
+		el.querySelector('#cb-sw-fill').classList.toggle('busy', state === 'running');
+		el.querySelector('#cb-sw-state').textContent = state === 'running' ? `${what}…` : `${what}: ${state === 'done' ? 'done' : 'failed'}`;
+		const pre = el.querySelector('#cb-sw-log');
+		pre.textContent = log.join('\n');
+		pre.scrollTop = pre.scrollHeight;
+		if (state === 'running') {
+			this.swTimer = setTimeout(() => this.swPoll(), 2000);
+		} else if (!quiet) {
+			this.core.showToast(`${what}: ${state === 'done' ? 'done' : 'failed'}`, state === 'done' ? 'success' : 'error');
+			try {
+				this.swInstalled = this.pkgParse((await this.call('pkg_list')).text);
+				this.swRenderInstalled();
+			} catch {}
+		}
+	}
+
 	// ---- console logs (nodectl archive on the eMMC, a file per boot) -------
 
 	async openLogs(node, name) {
@@ -1581,8 +1703,8 @@ export default class ClusterBoxAddon {
 		}
 	}
 
-	async loadFirmware() {
-		const body = document.getElementById('cb-body');
+	async loadFirmware(body = this.fwEl) {
+		this.fwEl = body;
 		body.innerHTML = '<div class="stat-card">Loading…</div>';
 		const fw = await this.fwLoad();
 		if (!fw) {
@@ -1655,14 +1777,14 @@ export default class ClusterBoxAddon {
 				this.core.showToast(`Check failed: ${err.message}`, 'error');
 			}
 			this.fwBanner(this.fw);
-			if (document.getElementById('cb-body') === body) this.loadFirmware();
+			if (body.isConnected) this.loadFirmware(body);
 		});
 	}
 
 	// ---- access ------------------------------------------------------------
 
-	async loadAccess() {
-		const body = document.getElementById('cb-body');
+	async loadAccess(body) {
+		this.accessEl = body;
 		let a;
 		try {
 			a = await this.call('admin_get');
@@ -1695,7 +1817,7 @@ export default class ClusterBoxAddon {
 				within 120 s, the snapshot is restored automatically.</div>
 				<div class="quick-actions"><button class="action-btn" id="cb-access-save">SAVE AND APPLY</button></div>
 			</div>`;
-		document.getElementById('cb-access-save').addEventListener('click', () => this.saveAccess());
+		body.querySelector('#cb-access-save').addEventListener('click', () => this.saveAccess());
 	}
 
 	async saveAccess() {
@@ -1719,9 +1841,9 @@ export default class ClusterBoxAddon {
 		}
 		const https = window.location.protocol === 'https:' && params.https_port !== '0';
 		const port = https ? params.https_port : params.http_port;
-		const url = `${https ? 'https' : 'http'}://${window.location.hostname}:${port}/moci/?cbconfirm=${encodeURIComponent(res.token)}#/cluster/access`;
+		const url = `${https ? 'https' : 'http'}://${window.location.hostname}:${port}/moci/?cbconfirm=${encodeURIComponent(res.token)}#/system/admin`;
 		this.core.showToast('Applying; opening the new address to confirm…', 'info');
-		document.getElementById('cb-body').insertAdjacentHTML('afterbegin', `<div class="stat-card cb-banner">
+		this.accessEl.insertAdjacentHTML('afterbegin', `<div class="stat-card cb-banner">
 			Applying. If this page does not move on by itself, open <a href="${this.esc(url)}">${this.esc(url)}</a>
 			within ${res.timeout} s, otherwise the previous settings come back.</div>`);
 		setTimeout(() => (window.location.href = url), 5000);
@@ -1729,8 +1851,11 @@ export default class ClusterBoxAddon {
 
 	// ---- services ----------------------------------------------------------
 
-	async loadServices() {
-		const body = document.getElementById('cb-body');
+	// Settings of the BMC's own services (UCI clusterbox), one card per
+	// group; each card sits on the page it belongs to (DNS/DHCP on
+	// NETWORK > DHCP & DNS, the WAN fallback on INTERFACES, time on
+	// SYSTEM > GENERAL, the log on LOGS, the history on BACKUP).
+	async loadServices(body, cards) {
 		let c;
 		try {
 			const [st, data] = await this.core.uciGet('clusterbox');
@@ -1750,38 +1875,49 @@ export default class ClusterBoxAddon {
 				value="${this.esc(Array.isArray(v) ? v.join(' ') : v)}" placeholder="${this.esc(ph)}">
 				${hint ? `<div class="cb-muted">${hint}</div>` : ''}</div>`;
 		};
-		body.innerHTML = `<div class="cb-grid2">
-			<div class="stat-card"><div class="section-title">DNS FOR THE BLADES</div>
-				${chk('dns', 'enabled', 'Answer DNS on omi0 (10.20.0.1)')}
-				${txt('dns', 'domain', 'LOCAL DOMAIN', 'cluster')}
-				${txt('dns', 'server', 'UPSTREAM SERVERS', 'from WAN DHCP', 'Space separated, e.g. 1.1.1.1 9.9.9.9; empty = the DNS servers WAN DHCP gives')}
-				${chk('dns', 'node_records', 'Names for the BMC (bmc) and the nodes (blade1…4 and their names)')}
-			</div>
-			<div class="stat-card"><div class="section-title">TIME</div>
-				${chk('ntp', 'serve_blades', 'NTP server for the blades')}
-				<div class="section-title" style="margin-top:16px">LOG</div>
-				${chk('log', 'persistent', 'Keep the system log on the eMMC (/overlay/log)')}
-				${txt('log', 'size', 'LOG SIZE, KiB', '1024')}
-				${txt('log', 'remote_ip', 'REMOTE SYSLOG SERVER', 'none')}
-				${txt('log', 'remote_port', 'REMOTE SYSLOG PORT', '514')}
-			</div>
-			<div class="stat-card"><div class="section-title">WAN FALLBACK ADDRESS</div>
-				${chk('wan', 'fallback', 'Add a fallback address when DHCP does not answer')}
-				${txt('wan', 'fallback_ipaddr', 'ADDRESS/PREFIX', 'last DHCP address', 'Empty = the last address DHCP gave')}
-				${txt('wan', 'fallback_gateway', 'GATEWAY', 'last DHCP gateway')}
-				${txt('wan', 'fallback_delay', 'WAIT FOR DHCP, s', '60')}
-			</div>
-			<div class="stat-card"><div class="section-title">CONFIGURATION HISTORY</div>
+		const CARDS = {
+			dns: () => `<div class="section-title">DNS, DHCP AND NAMES FOR THE BLADES (omi0)</div>
+				<div class="cb-grid2"><div>
+					${chk('dns', 'enabled', 'Answer DNS on omi0 (10.20.0.1)')}
+					${txt('dns', 'domain', 'LOCAL DOMAIN', 'cluster')}
+					${txt('dns', 'server', 'UPSTREAM DNS SERVERS', 'from WAN DHCP', 'Space separated, e.g. 1.1.1.1 9.9.9.9; empty = the servers WAN DHCP gives')}
+					${chk('dns', 'node_records', 'Names for the BMC (bmc) and the nodes (blade1…4 and their names)')}
+				</div><div>
+					${chk('dns', 'dhcp', 'DHCP on omi0 (gateway, DNS and NTP: the BMC)')}
+					${txt('dns', 'dhcp_start', 'FIRST ADDRESS (10.20.0.x)', '20', 'The blades, 10.20.0.205 and the MetalLB pool 210-219 are static; keep the range clear of them')}
+					${txt('dns', 'dhcp_limit', 'NUMBER OF ADDRESSES', '80')}
+					${txt('dns', 'dhcp_lease', 'LEASE TIME', '12h')}
+				</div></div>`,
+			ntp: () => `<div class="section-title">TIME SERVER FOR THE BLADES</div>
+				${chk('ntp', 'serve_blades', 'NTP server on 10.20.0.1 (sysntpd; the blades and DHCP clients use it)')}`,
+			log: () => `<div class="section-title">LOG STORAGE</div>
+				<div class="cb-grid2"><div>
+					${chk('log', 'persistent', 'Keep the system log on the eMMC (/overlay/log)')}
+					${txt('log', 'size', 'LOG SIZE, KiB', '1024')}
+				</div><div>
+					${txt('log', 'remote_ip', 'REMOTE SYSLOG SERVER', 'none')}
+					${txt('log', 'remote_port', 'REMOTE SYSLOG PORT', '514')}
+				</div></div>`,
+			wan: () => `<div class="section-title">WAN FALLBACK ADDRESS</div>
+				${chk('wan', 'fallback', 'Add a fallback address when WAN DHCP does not answer, so the BMC stays reachable')}
+				<div class="cb-grid2"><div>
+					${txt('wan', 'fallback_ipaddr', 'ADDRESS/PREFIX', 'last DHCP address', 'Empty = the last address DHCP gave')}
+					${txt('wan', 'fallback_gateway', 'GATEWAY', 'last DHCP gateway')}
+				</div><div>
+					${txt('wan', 'fallback_delay', 'WAIT FOR DHCP, s', '60')}
+				</div></div>`,
+			history: () => `<div class="section-title">SNAPSHOT SETTINGS</div>
 				${txt('history', 'keep', 'SNAPSHOTS TO KEEP', '50')}
-				${chk('history', 'daily', 'Daily snapshot')}
-			</div></div>
-			<div class="quick-actions" style="margin-top:16px"><button class="action-btn" id="cb-services-save">SAVE AND APPLY</button></div>`;
-		document.getElementById('cb-services-save').addEventListener('click', () => this.saveServices());
+				${chk('history', 'daily', 'Daily snapshot')}`
+		};
+		body.innerHTML = `<div class="stat-card">${cards.map(k => CARDS[k]()).join('')}
+			<div class="quick-actions" style="margin-top:12px"><button class="action-btn" data-cbsave>SAVE AND APPLY</button></div></div>`;
+		body.querySelector('[data-cbsave]').addEventListener('click', () => this.saveServices(body));
 	}
 
-	async saveServices() {
+	async saveServices(body) {
 		const sections = {};
-		document.querySelectorAll('#cb-body [data-s]').forEach(el => {
+		body.querySelectorAll('[data-s]').forEach(el => {
 			const s = el.dataset.s;
 			sections[s] = sections[s] || {};
 			if (el.dataset.type === 'bool') sections[s][el.dataset.o] = el.checked ? '1' : '0';
@@ -1808,8 +1944,8 @@ export default class ClusterBoxAddon {
 
 	// ---- configuration history ------------------------------------------
 
-	async loadHistory() {
-		const body = document.getElementById('cb-body');
+	async loadHistory(body = this.histEl) {
+		this.histEl = body;
 		let h;
 		try {
 			h = await this.call('history_list');
@@ -1967,8 +2103,8 @@ export default class ClusterBoxAddon {
 
 	// ---- Tailscale ---------------------------------------------------------
 
-	async loadTailscale() {
-		const body = document.getElementById('cb-body');
+	async loadTailscale(body = this.tsEl) {
+		this.tsEl = body;
 		let s;
 		try {
 			s = await this.call('tailscale_status');

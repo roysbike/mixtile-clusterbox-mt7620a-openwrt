@@ -79,7 +79,7 @@
 .cb-fw-steps li.active { color: var(--starship-steel, #e5e7eb); font-weight: 600; }
 .cb-fw-steps li.done { color: var(--success-green, #22c55e); }
 .cb-fw-steps .progress-bar { margin-top: 6px; }
-#addon-cluster-page a, .cb-fw-modal a:not(.action-btn) { color: var(--primary-accent, #60a5fa); }
+#addon-cluster-page a, .addon-section a:not(.action-btn):not(.action-btn-sm), .cb-fw-modal a:not(.action-btn) { color: var(--primary-accent, #60a5fa); }
 
 /* Home: the Cluster Box from the front (BMC on top, slots 1-4 below) and
    the cluster beside it. Levels: ok / warn / bad / off. */
@@ -210,3 +210,9 @@
 .cb-ov-file { width: auto; max-width: 280px; padding: 5px 8px; }
 .cb-ov-log { max-height: 50vh; margin: 16px 0 0; }
 .cb-fp { cursor: help; }
+
+/* SYSTEM > SOFTWARE. */
+.cb-sw-q { width: 260px; padding: 7px 10px; }
+.cb-sw-job { margin-top: 14px; }
+.cb-sw-log { max-height: 40vh; margin: 8px 0 0; }
+.addon-section .cb-banner { margin-bottom: 16px; }

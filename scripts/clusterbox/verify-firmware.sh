@@ -144,6 +144,13 @@ grep -q "'network:tab'" "$r/www/moci/js/addons/cluster/addon.js" || fail "Cluste
 grep -q 'ovpn_server_setup' "$r/usr/share/rpcd/acl.d/clusterbox.json" || fail "ACL has no OpenVPN methods"
 grep -q '/etc/openvpn/cb/' "$r/lib/upgrade/keep.d/clusterbox" || fail "OpenVPN keys are not kept on upgrade"
 grep -q "wireguard '1'" "$r/etc/config/moci" || fail "MoCI WireGuard page is off"
+# MoCI patch 006: ClusterBox structure, firmware on the login page,
+# rc for STARTUP; the apk backend for SOFTWARE.
+grep -q 'id="login-fw"' "$r/www/moci/index.html" || fail "login page has no firmware line (patch 006)"
+grep -q '"rc": \["init"\]' "$r/usr/share/rpcd/acl.d/moci.json" || fail "MoCI ACL has no rc (STARTUP)"
+grep -q 'firmware_json' "$r/etc/init.d/moci-version" || fail "moci-version does not write firmware.json"
+[ -x "$r/usr/libexec/clusterbox/pkg" ] || fail "/usr/libexec/clusterbox/pkg missing or not executable"
+grep -q 'data-tab="wireless"' "$r/www/moci/index.html" && fail "Wi-Fi tab still in the web UI"
 grep -q 'watch) cmd_watch' "$r/usr/libexec/mixtile-update" || fail "mixtile-update has no background check"
 ls "$r"/etc/rc.d/S*mixtile-update >/dev/null 2>&1 || fail "mixtile-update is not enabled at boot"
 grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"

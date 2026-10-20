@@ -138,6 +138,21 @@ apply_dns() {
 		udel "$d.noresolv"
 	fi
 
+	# DHCP for the fabric: addresses for anything without a static one
+	# (the blades and the MetalLB/API addresses are static), the BMC as
+	# gateway, DNS server and NTP server (option 42).
+	if [ "$en" = 1 ] && [ "$(cb dns dhcp 1)" = 1 ]; then
+		uci -q get dhcp.openmiop >/dev/null || { uci -q set dhcp.openmiop=dhcp; mark dhcp; }
+		uset dhcp.openmiop.interface openmiop
+		uset dhcp.openmiop.ignore 0
+		uset dhcp.openmiop.start "$(cb dns dhcp_start 20)"
+		uset dhcp.openmiop.limit "$(cb dns dhcp_limit 80)"
+		uset dhcp.openmiop.leasetime "$(cb dns dhcp_lease 12h)"
+		ulist dhcp.openmiop.dhcp_option "42,10.20.0.1"
+	elif uci -q get dhcp.openmiop >/dev/null; then
+		uset dhcp.openmiop.ignore 1
+	fi
+
 	nlist=$(uci -q get "$d.notinterface" | tr ' ' '\n' | grep -vx omi0 | tr '\n' ' ')
 	[ "$en" = 1 ] || nlist="$nlist omi0"
 	ulist "$d.notinterface" $nlist

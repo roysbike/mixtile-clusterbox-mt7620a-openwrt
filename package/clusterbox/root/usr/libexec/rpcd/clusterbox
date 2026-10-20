@@ -547,9 +547,16 @@ ovpn_run() {
 }
 
 # Run ovpn; reply {code, text} with its stdout as a JSON string.
-ovpn_text() {
+ovpn_text() { tool_text "$OVPN" "$@"; }
+
+# Packages (apk): /usr/libexec/clusterbox/pkg.
+PKG=/usr/libexec/clusterbox/pkg
+
+# Run a helper; reply {code, text} with its stdout, {code, message} with
+# its stderr on failure.
+tool_text() {
 	local rc
-	"$OVPN" "$@" > "$RUN/ovpn.$$" 2> "$RUN/ovpn.err.$$"
+	"$@" > "$RUN/ovpn.$$" 2> "$RUN/ovpn.err.$$"
 	rc=$?
 	if [ $rc -ne 0 ]; then
 		reply 1 "$(cat "$RUN/ovpn.err.$$")"
@@ -612,6 +619,10 @@ list)
 		"info_get": {},
 		"info_set": { "info": "" },
 		"ovpn_list": {},
+		"pkg_list": {},
+		"pkg_search": { "q": "" },
+		"pkg_status": {},
+		"pkg_job": { "action": "install", "name": "" },
 		"ovpn_log": { "name": "" },
 		"ovpn_client_get": { "name": "" },
 		"ovpn_server_setup": { "port": "1194", "proto": "udp", "subnet": "10.8.0.0/24", "host": "" },
@@ -686,6 +697,10 @@ call)
 	info_get) info_get ;;
 	info_set) info_set ;;
 	ovpn_list) "$OVPN" list ;;
+	pkg_list) tool_text "$PKG" list ;;
+	pkg_search) json_get_vars q; tool_text "$PKG" search "$q" ;;
+	pkg_status) tool_text "$PKG" status ;;
+	pkg_job) json_get_vars action name; out=$("$PKG" job "$action" "$name" 2>&1) && reply 0 "$out" || reply 1 "$out" ;;
 	ovpn_log) json_get_vars name; ovpn_text log "$name" ;;
 	ovpn_client_get) json_get_vars name; ovpn_text client-get "$name" ;;
 	ovpn_client_add) json_get_vars name; ovpn_text client-add "$name" ;;

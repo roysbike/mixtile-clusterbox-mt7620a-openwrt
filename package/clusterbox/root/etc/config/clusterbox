@@ -28,13 +28,20 @@ config wan 'wan'
 	option fallback_gateway ''
 	option fallback_delay '60'
 
-# DNS for the blades (dnsmasq on omi0): names <name>.<domain> for the
+# DNS and DHCP for the blades (dnsmasq on omi0): names <name>.<domain> for the
 # BMC (bmc) and the nodes of /etc/config/nodectl; upstream servers
 # ("server", empty = the ones from WAN DHCP).
 config dns 'dns'
 	option enabled '1'
 	option domain 'cluster'
 	option node_records '1'
+	# DHCP on omi0: 10.20.0.<dhcp_start> and the next dhcp_limit
+	# addresses (20-99; the blades, 10.20.0.205 and the MetalLB pool
+	# 210-219 are static), with the BMC as gateway, DNS and NTP server.
+	option dhcp '1'
+	option dhcp_start '20'
+	option dhcp_limit '80'
+	option dhcp_lease '12h'
 
 # NTP server for the blades (sysntpd).
 config ntp 'ntp'

@@ -99,15 +99,27 @@ Blade 3), которым нужно:
 | `kmod-omi-rc`, `openmiop` | сторона OpenMIOP на BMC: `omi-rc.ko` (журнал: `dmesg \| grep omi0`), `/etc/init.d/openmiop`, запасной `openmiop-rc` и `omi-peek` из pcie-ep-net |
 | `nodectl`, `luci-app-nodectl` | питание, сброс, консоли блейдов (терминал в браузере), архив консолей, PXE и прошивка блейдов; меню LuCI **Cluster** |
 | `clusterbox` | настройки BMC (`/etc/config/clusterbox`): доступ к управлению с защитой от отката, запасной адрес WAN, DNS и NTP для блейдов, постоянный журнал, история конфигурации, журнал доступности нод, описание кластера, состояние прошивки; backend веб-интерфейса в rpcd |
-| `moci`, `moci-app-clusterbox` | веб-интерфейс (MoCI) со страницами ClusterBox: CLUSTER (стартовая), ACCESS, SERVICES, CONFIG HISTORY, TAILSCALE, FIRMWARE; LuCI остаётся на `/cgi-bin/luci` |
+| `moci`, `moci-app-clusterbox` | веб-интерфейс (MoCI, доработанный под коробку) со страницами и разделами ClusterBox, см. [Веб-интерфейс](#веб-интерфейс); LuCI остаётся на `/cgi-bin/luci` |
 | `mixtile-release` | `/etc/mixtile-release`: версия, коммит, дата сборки, протокол OpenMIOP |
 | `mixtile-update`, `luci-app-mixtile-update` | поиск, загрузка, проверка и установка обновлений из GitHub Releases, фоновая проверка |
-| Tailscale, WireGuard, OpenVPN | удалённый доступ (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` + `openssl-util` для ключей сервера), страницы в веб-интерфейсе (CLUSTER → TAILSCALE, NETWORK → WIREGUARD и OPENVPN) и в LuCI |
+| Tailscale, WireGuard, OpenVPN | удалённый доступ (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` + `openssl-util` для ключей сервера), страницы в веб-интерфейсе (NETWORK → TAILSCALE, WIREGUARD и OPENVPN) и в LuCI |
 
 ### Веб-интерфейс
 
-**Веб-интерфейс открывается на странице CLUSTER** (dashboard самого BMC
-от MoCI — в разделе **BMC**):
+Три страницы, у каждой настройки одно место (на странице входа — версия
+прошивки со ссылкой на её релиз на GitHub):
+
+| Страница | Вкладки |
+| --- | --- |
+| **CLUSTER** | стартовая: кластер, коробка спереди, здоровье, трафик |
+| **NETWORK** | TOPOLOGY · INTERFACES (с запасным адресом WAN) · FIREWALL (с пробросом портов) · DHCP & DNS (с DNS, DHCP и именами для блейдов на omi0) · ROUTES · DEVICES · TAILSCALE · WIREGUARD · OPENVPN · DIAGNOSTICS |
+| **SYSTEM** | GENERAL (имя, часовой пояс, NTP для блейдов, перезагрузка) · ACCESS (порты и зоны веб-интерфейса и SSH, пароль) · FIRMWARE (обновления с GitHub и ручная загрузка) · BACKUP (с прогрессом и историей конфигурации) · SOFTWARE (apk: установленные, поиск, установка, удаление) · STARTUP (автозапуск, старт/стоп) · LOGS (с хранением журнала) · SCHEDULED TASKS · SSH KEYS · STORAGE |
+
+DHCP на omi0 включён по умолчанию (10.20.0.20-99; блейды, 10.20.0.205 и
+пул MetalLB 210-219 статические) и раздаёт BMC как шлюз, DNS и NTP. Радио
+у BMC нет, поэтому страницы Wi-Fi нет.
+
+**CLUSTER**, стартовая страница:
 
 * Сверху — кластер: имя, описание, роль и заметка для каждого слота
   (**EDIT**, хранится в `/etc/config/clusterbox`; BMC не видит Kubernetes,
@@ -137,7 +149,7 @@ Blade 3), которым нужно:
 12 часов; только проверка, ничего не скачивается): баннер на всех
 страницах предлагает его вместе с описанием изменений, а **UPDATE**
 скачивает, проверяет (SHA-256, плата, подпись при настроенных ключах) и
-ставит его, ждёт BMC и перезагружает страницу. **Cluster → Firmware**
+ставит его, ждёт BMC и перезагружает страницу. **SYSTEM → FIRMWARE**
 показывает работающую прошивку (версия, OpenWrt, ядро, коммит, разделы)
 и последнюю проверку. Настройки: `auto_check`, `check_interval` в
 `/etc/config/mixtile-update`. Сборкам разработки (`vX.Y.Z-N-g<sha>`)
@@ -176,7 +188,7 @@ OpenVPN и интерфейсы WireGuard.
   показываются.
 
 У WireGuard своя вкладка (**NETWORK → WIREGUARD**, страница MoCI),
-Tailscale — в **CLUSTER → TAILSCALE**.
+Tailscale — в **NETWORK → TAILSCALE**.
 
 ### Логи консолей и доступность
 
