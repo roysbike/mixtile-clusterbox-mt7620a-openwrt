@@ -1,0 +1,10 @@
+{
+	"admin/clusterbox-ui": {
+		"title": "ClusterBox UI",
+		"order": 990,
+		"action": {
+			"type": "view",
+			"path": "clusterbox/moci"
+		}
+	}
+}

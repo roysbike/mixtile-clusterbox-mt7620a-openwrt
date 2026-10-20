@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- LuCI: menu entry **ClusterBox UI** (next to Logout) that opens the main
+  web UI (MoCI, `/moci/`); MoCI has its own session and may ask to log in.
+
 ## [0.4.0] - 2026-10-20
 
 The firmware on OpenWrt 25.12.6 (Linux 6.12.112) with a new web UI, the
