@@ -136,6 +136,14 @@ grep -q "placement === 'home'" "$r/www/moci/js/core.js" || fail "MoCI core.js ha
 grep -q '"placement": "home"' "$r/www/moci/js/addons/cluster/manifest.json" || fail "ClusterBox add-on is not the start page"
 grep -q 'info_get' "$r/usr/libexec/rpcd/clusterbox" && grep -q 'info_set' "$r/usr/share/rpcd/acl.d/clusterbox.json" ||
 	fail "clusterbox backend or ACL has no cluster description (info_get/info_set)"
+# NETWORK > TOPOLOGY and OPENVPN: the add-on's tabs, the OpenVPN backend
+# (server keys with openssl) and its ACL.
+grep -q "'network:tab'" "$r/www/moci/js/addons/cluster/addon.js" || fail "ClusterBox add-on has no network tabs"
+[ -x "$r/usr/libexec/clusterbox/ovpn" ] || fail "/usr/libexec/clusterbox/ovpn missing or not executable"
+[ -x "$r/usr/bin/openssl" ] || fail "openssl missing (OpenVPN server keys)"
+grep -q 'ovpn_server_setup' "$r/usr/share/rpcd/acl.d/clusterbox.json" || fail "ACL has no OpenVPN methods"
+grep -q '/etc/openvpn/cb/' "$r/lib/upgrade/keep.d/clusterbox" || fail "OpenVPN keys are not kept on upgrade"
+grep -q "wireguard '1'" "$r/etc/config/moci" || fail "MoCI WireGuard page is off"
 grep -q 'watch) cmd_watch' "$r/usr/libexec/mixtile-update" || fail "mixtile-update has no background check"
 ls "$r"/etc/rc.d/S*mixtile-update >/dev/null 2>&1 || fail "mixtile-update is not enabled at boot"
 grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"

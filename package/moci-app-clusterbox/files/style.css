@@ -181,3 +181,32 @@
 	.cb-edit { position: static; margin-top: 12px; }
 	.cb-home-title { padding-right: 0; }
 }
+
+/* NETWORK > TOPOLOGY: SVG boxes and links. */
+.cb-net-wrap { overflow-x: auto; }
+.cb-net-wrap .cb-topo { min-width: 900px; }
+.cb-topo { width: 100%; height: auto; display: block; }
+.cb-topo .cb-box { fill: var(--glass-bg, rgba(255, 255, 255, 0.04)); stroke: var(--glass-border, rgba(255, 255, 255, 0.12)); stroke-width: 1; }
+.cb-topo .cb-box.up { stroke: var(--success-green, #22c55e); }
+.cb-topo .cb-box.warn { stroke: var(--warning-amber, #f59e0b); }
+.cb-topo .cb-box.down { stroke: var(--alert-red, #ef4444); }
+.cb-topo .cb-box.off { stroke: var(--steel-muted, #6b7280); stroke-dasharray: 4 3; }
+.cb-topo .cb-box.vip { fill: rgba(96, 165, 250, 0.06); }
+.cb-topo text { fill: var(--starship-steel, #e5e7eb); font-family: var(--font-sans, sans-serif); font-size: 12px; }
+.cb-topo text.cb-title { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
+.cb-topo text.cb-sub { fill: var(--steel-muted, #9ca3af); font-size: 11px; }
+.cb-topo text.cb-rate { fill: var(--primary-accent, #60a5fa); font-family: var(--font-mono, monospace); font-size: 10.5px; }
+.cb-topo .cb-link { fill: none; stroke-width: 2; stroke: var(--steel-muted, #6b7280); }
+.cb-topo .cb-link.up { stroke: var(--success-green, #22c55e); }
+.cb-topo .cb-link.warn { stroke: var(--warning-amber, #f59e0b); }
+.cb-topo .cb-link.down { stroke: var(--alert-red, #ef4444); stroke-dasharray: 5 4; }
+.cb-topo .cb-link.off { stroke-dasharray: 2 4; }
+.cb-topo .cb-link.flow { stroke-dasharray: 6 6; animation: cb-flow 1.2s linear infinite; }
+@keyframes cb-flow { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) { .cb-topo .cb-link.flow { animation: none; } }
+
+/* NETWORK > OPENVPN. */
+.cb-ov-name { width: 220px; padding: 7px 10px; }
+.cb-ov-file { width: auto; max-width: 280px; padding: 5px 8px; }
+.cb-ov-log { max-height: 50vh; margin: 16px 0 0; }
+.cb-fp { cursor: help; }

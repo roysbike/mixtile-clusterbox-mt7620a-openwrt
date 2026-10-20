@@ -537,6 +537,30 @@ info_set() {
 	uci commit clusterbox && reply 0 "saved" || reply 1 "uci commit failed"
 }
 
+# OpenVPN (server and uploaded client connections): /usr/libexec/clusterbox/ovpn.
+OVPN=/usr/libexec/clusterbox/ovpn
+
+# Run ovpn; reply {code, message} with its output (stderr on failure).
+ovpn_run() {
+	local out
+	out=$("$OVPN" "$@" 2>&1) && reply 0 "$out" || reply 1 "$out"
+}
+
+# Run ovpn; reply {code, text} with its stdout as a JSON string.
+ovpn_text() {
+	local rc
+	"$OVPN" "$@" > "$RUN/ovpn.$$" 2> "$RUN/ovpn.err.$$"
+	rc=$?
+	if [ $rc -ne 0 ]; then
+		reply 1 "$(cat "$RUN/ovpn.err.$$")"
+	else
+		printf '{ "code": 0, "text": '
+		json_text < "$RUN/ovpn.$$"
+		printf ' }\n'
+	fi
+	rm -f "$RUN/ovpn.$$" "$RUN/ovpn.err.$$"
+}
+
 fw_status() {
 	local st chk base p2
 	st=$("$MU" status 2>/dev/null); [ -n "$st" ] || st='{}'
@@ -587,6 +611,17 @@ list)
 		"fw_status": {},
 		"info_get": {},
 		"info_set": { "info": "" },
+		"ovpn_list": {},
+		"ovpn_log": { "name": "" },
+		"ovpn_client_get": { "name": "" },
+		"ovpn_server_setup": { "port": "1194", "proto": "udp", "subnet": "10.8.0.0/24", "host": "" },
+		"ovpn_server_enable": { "enabled": "1" },
+		"ovpn_server_remove": {},
+		"ovpn_client_add": { "name": "" },
+		"ovpn_client_del": { "name": "" },
+		"ovpn_import": { "name": "", "config": "" },
+		"ovpn_enable": { "name": "", "enabled": "1" },
+		"ovpn_delete": { "name": "" },
 		"fw_check": {},
 		"fw_download": {},
 		"fw_install": {}
@@ -650,6 +685,20 @@ call)
 	fw_status) fw_status ;;
 	info_get) info_get ;;
 	info_set) info_set ;;
+	ovpn_list) "$OVPN" list ;;
+	ovpn_log) json_get_vars name; ovpn_text log "$name" ;;
+	ovpn_client_get) json_get_vars name; ovpn_text client-get "$name" ;;
+	ovpn_client_add) json_get_vars name; ovpn_text client-add "$name" ;;
+	ovpn_client_del) json_get_vars name; ovpn_run client-del "$name" ;;
+	ovpn_server_setup) json_get_vars port proto subnet host; ovpn_run server-setup "$port" "$proto" "$subnet" "$host" ;;
+	ovpn_server_enable) json_get_vars enabled; ovpn_run server-enable "$enabled" ;;
+	ovpn_server_remove) ovpn_run server-remove ;;
+	ovpn_import)
+		json_get_vars name config
+		out=$(printf '%s\n' "$config" | "$OVPN" import "$name" 2>&1) && reply 0 "$out" || reply 1 "$out"
+		;;
+	ovpn_enable) json_get_vars name enabled; ovpn_run enable "$name" "$enabled" ;;
+	ovpn_delete) json_get_vars name; ovpn_run delete "$name" ;;
 	fw_check)
 		# Up to a minute with GitHub: longer than rpcd waits for a plugin.
 		( "$MU" check ) </dev/null >/dev/null 2>&1 &

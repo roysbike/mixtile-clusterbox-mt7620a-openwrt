@@ -102,7 +102,7 @@ Blade 3), которым нужно:
 | `moci`, `moci-app-clusterbox` | веб-интерфейс (MoCI) со страницами ClusterBox: CLUSTER (стартовая), ACCESS, SERVICES, CONFIG HISTORY, TAILSCALE, FIRMWARE; LuCI остаётся на `/cgi-bin/luci` |
 | `mixtile-release` | `/etc/mixtile-release`: версия, коммит, дата сборки, протокол OpenMIOP |
 | `mixtile-update`, `luci-app-mixtile-update` | поиск, загрузка, проверка и установка обновлений из GitHub Releases, фоновая проверка |
-| Tailscale, WireGuard, OpenVPN | удалённый доступ (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` со страницами LuCI) |
+| Tailscale, WireGuard, OpenVPN | удалённый доступ (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` + `openssl-util` для ключей сервера), страницы в веб-интерфейсе (CLUSTER → TAILSCALE, NETWORK → WIREGUARD и OPENVPN) и в LuCI |
 
 ### Веб-интерфейс
 
@@ -147,6 +147,36 @@ Blade 3), которым нужно:
 интерфейса: `/www/moci/version.txt`, хеш файлов, который пишется при
 загрузке, читается в обход кеша и подставляется во все адреса (uhttpd
 не отдаёт Cache-Control).
+
+### Сеть: топология и VPN
+
+**NETWORK → TOPOLOGY** рисует сеть коробки такой, какая она сейчас, раз в
+5 с: интернет и роутер выше по сети, BMC (адрес и линк WAN, трафик,
+проброс портов, зоны firewall) и каждую сеть за ним с тем, что в ней:
+`omi0` (PCIe-фабрика) с четырьмя блейдами и адресами проброшенных
+сервисов, Tailscale, сервер OpenVPN с клиентами, исходящие подключения
+OpenVPN и интерфейсы WireGuard.
+
+**NETWORK → OPENVPN**:
+
+* *Сервер* — удалённый доступ к BMC (веб-интерфейс, SSH) и к сети блейдов
+  10.20.0.0/24 с ноутбука или телефона. **SET UP THE SERVER** спрашивает
+  адрес, к которому подключаются клиенты, порт, протокол и подсеть
+  клиентов; **ADD CLIENT** создаёт клиента и скачивает его `.ovpn` (его
+  можно скачать ещё раз позже), **DELETE** закрывает этому клиенту
+  доступ. Удостоверяющего центра нет: у сервера и у каждого клиента свой
+  самоподписанный EC-сертификат, и каждая сторона проверяет SHA-256
+  отпечаток другой (`peer-fingerprint`). Ключи хранятся на BMC в
+  `/etc/openvpn/cb/` и переживают обновление прошивки. WAN-адрес BMC
+  обычно частный: пробросьте порт на него на роутере.
+* *Подключения к другим VPN-серверам* — загрузите `.ovpn` с другой
+  стороны (офис, облачная сеть), и BMC подключится по нему. Директивы,
+  запускающие программы (`up`, `script-security`, `plugin`, …),
+  отклоняются. Подключения, настроенные в LuCI (**VPN → OpenVPN**), тоже
+  показываются.
+
+У WireGuard своя вкладка (**NETWORK → WIREGUARD**, страница MoCI),
+Tailscale — в **CLUSTER → TAILSCALE**.
 
 ### Логи консолей и доступность
 

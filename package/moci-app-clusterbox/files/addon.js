@@ -107,10 +107,21 @@ export default class ClusterBoxAddon {
 		};
 	}
 
+	// Two tabs on the MoCI network page.
+	getExtensions() {
+		return {
+			'network:tab': [
+				{ id: 'topology', label: 'TOPOLOGY', after: 'interfaces', render: el => this.renderTopology(el) },
+				{ id: 'openvpn', label: 'OPENVPN', after: 'vpn', render: el => this.renderOpenvpn(el) }
+			]
+		};
+	}
+
 	cleanup() {
 		this.stopPolling();
 		this.closeLogs();
 		clearInterval(this.fwTimer);
+		clearTimeout(this.topoTimer);
 	}
 
 	// ---- helpers ---------------------------------------------------------
@@ -668,6 +679,345 @@ export default class ClusterBoxAddon {
 		if (h) return `${h}h ${m}m`;
 		if (m) return `${m}m`;
 		return `${s}s`;
+	}
+
+	// ---- network topology (NETWORK > TOPOLOGY) ---------------------------
+	// Internet, the upstream router, the BMC and its networks: the PCIe
+	// fabric with the blades and the forwarded service addresses, and the
+	// remote access networks (Tailscale, OpenVPN, WireGuard).
+
+	renderTopology(el) {
+		el.innerHTML = `<div class="stat-card"><div class="section-title">NETWORK TOPOLOGY</div>
+			<div id="cb-net-topo" class="cb-muted">Loading…</div>
+			<div class="cb-muted cb-note">Every 5 s from the BMC. Blade-to-blade traffic goes through the PCIe switch and is not seen here.</div></div>`;
+		const tick = async () => {
+			clearTimeout(this.topoTimer);
+			const box = document.getElementById('cb-net-topo');
+			if (!box || box.closest('.tab-content')?.classList.contains('hidden')) return;
+			if (!document.hidden) {
+				try {
+					const [t, ifs, ov] = await Promise.all([
+						this.call('topology'),
+						this.core.ubusCall('network.interface', 'dump', {}).then(([st, d]) => (st === 0 ? d?.interface || [] : [])).catch(() => []),
+						this.call('ovpn_list').catch(() => null),
+						this.info ? null : this.loadInfo()
+					]);
+					box.classList.remove('cb-muted');
+					box.innerHTML = this.netSvg(t, ifs, ov, this.netRates(t));
+				} catch (e) {
+					box.innerHTML = `<div class="cb-muted">Topology unavailable: ${this.esc(e.message)}</div>`;
+				}
+			}
+			this.topoTimer = setTimeout(tick, POLL_MS);
+		};
+		tick();
+	}
+
+	netRates(t) {
+		const now = Date.now() / 1000;
+		const p = this.netPrev;
+		const dt = p ? now - p.time : 0;
+		const r = {
+			wanRx: this.rate(t.wan?.rx_bytes, p?.wanRx, dt),
+			wanTx: this.rate(t.wan?.tx_bytes, p?.wanTx, dt),
+			omiRx: this.rate(t.pcie?.rx_bytes, p?.omiRx, dt),
+			omiTx: this.rate(t.pcie?.tx_bytes, p?.omiTx, dt)
+		};
+		this.netPrev = { time: now, wanRx: t.wan?.rx_bytes, wanTx: t.wan?.tx_bytes, omiRx: t.pcie?.rx_bytes, omiTx: t.pcie?.tx_bytes };
+		return r;
+	}
+
+	netSvg(t, ifs, ov, r) {
+		const esc = v => this.esc(v);
+		const addr = i => (i?.['ipv4-address'] || []).map(a => `${a.address}/${a.mask}`).join(' ');
+		const byDev = d => ifs.find(i => i.l3_device === d || i.device === d);
+		const wan = t.wan || {};
+		const pcie = t.pcie || {};
+		const nodes = t.cluster?.nodes || [];
+		const svc = t.services || [];
+		const ts = t.tailscale || {};
+		const lv = ok => (ok === true ? 'up' : ok === false ? 'down' : 'off');
+		const rate = (d, u) => (d == null ? '' : `↓ ${this.fmtRate(d)}  ↑ ${this.fmtRate(u)}`);
+
+		// Right-hand column: networks and what is on them.
+		const nets = [];
+		const omi = byDev('omi0');
+		const ends = nodes.map(n => ({
+			lv: n.power === false ? 'off' : n.pcie_link ? (n.reachable ? 'up' : 'warn') : n.power ? 'down' : 'off',
+			title: this.nodeLabel(Number(n.id), n),
+			sub: `${n.ipaddr || '—'} · slot ${n.id} · ${n.pcie_link ? this.linkText(n.link_gen, n.link_width) : n.power ? 'no PCIe link' : 'off'}`
+		}));
+		const vips = [...new Set(svc.map(x => (x.target || '').split(':')[0]).filter(Boolean))];
+		for (const ip of vips) {
+			const names = svc.filter(x => x.target.startsWith(`${ip}:`));
+			ends.push({
+				lv: names.every(x => x.up === '1') ? 'up' : names.some(x => x.up === '1') ? 'warn' : 'down',
+				title: ip,
+				sub: names.map(x => `${x.name} :${x.port}`).join(' · '),
+				vip: true
+			});
+		}
+		nets.push({
+			lv: !pcie.switch ? 'down' : pcie.omi0 ? 'up' : 'warn',
+			title: 'omi0 · PCIe fabric',
+			sub: `${addr(omi) || '10.20.0.1/24'} · ${pcie.omi_driver || 'no driver'}`,
+			sub2: r.omiTx != null ? `gateway ${rate(r.omiTx, r.omiRx)}` : pcie.switch ? 'ASM2824 switch, Gen3 x2 per blade' : 'no PCIe switch',
+			rate: true,
+			ends
+		});
+		if (ts.installed) {
+			nets.push({
+				lv: ts.state === 'Running' ? 'up' : 'off',
+				title: 'tailscale0 · Tailscale',
+				sub: ts.ipaddr || ts.state || 'off',
+				sub2: 'tailnet: subnet route to the blades',
+				ends: [{ lv: ts.state === 'Running' ? 'up' : 'off', title: 'tailnet', sub: ts.state || 'off' }]
+			});
+		}
+		const srv = ov?.server;
+		if (srv?.configured) {
+			const cl = srv.clients || [];
+			nets.push({
+				lv: srv.running ? 'up' : srv.enabled ? 'down' : 'off',
+				title: 'tun-cb · OpenVPN server',
+				sub: `${srv.subnet} · ${srv.proto}/${srv.port}`,
+				sub2: `${cl.filter(c => c.connected).length}/${cl.length} clients connected`,
+				ends: cl.length
+					? cl.map(c => ({ lv: c.connected ? 'up' : 'off', title: c.name, sub: c.connected ? `${c.address} from ${c.real}` : 'not connected' }))
+					: [{ lv: 'off', title: 'no clients', sub: 'NETWORK > OPENVPN adds them' }]
+			});
+		}
+		for (const c of ov?.connections || []) {
+			nets.push({
+				lv: c.connected ? 'up' : c.enabled ? 'down' : 'off',
+				title: `OpenVPN client · ${c.name}`,
+				sub: c.remote || '',
+				sub2: c.connected ? 'connected' : c.enabled ? (c.running ? 'connecting' : 'not running') : 'off',
+				ends: [{ lv: c.connected ? 'up' : 'off', title: c.remote ? c.remote.split(' ')[0] : 'remote', sub: 'remote network' }]
+			});
+		}
+		for (const i of ifs.filter(x => x.proto === 'wireguard')) {
+			nets.push({ lv: i.up ? 'up' : 'off', title: `${i.l3_device || i.interface} · WireGuard`, sub: addr(i) || '', sub2: i.interface,
+				ends: [{ lv: i.up ? 'up' : 'off', title: 'peers', sub: 'NETWORK > WIREGUARD' }] });
+		}
+
+		// Geometry: four left columns, nets and their endpoints on the right.
+		const W = 1220;
+		const C = { inet: [10, 150], gw: [190, 170], bmc: [400, 220], net: [680, 230], end: [960, 250] };
+		const eh = 44, eg = 8, ng = 22;
+		let y = 20;
+		for (const n of nets) {
+			n.y = y;
+			n.h = Math.max(70, n.ends.length * (eh + eg) - eg);
+			y += n.h + ng;
+		}
+		const H = Math.max(y, 260);
+		const mid = Math.min(nets[0] ? nets[0].y + nets[0].h / 2 : 120, H / 2);
+		const box = (col, yy, h, cls, title, sub, sub2) => {
+			const [x, w] = C[col];
+			return `<rect class="cb-box ${cls}" x="${x}" y="${yy}" width="${w}" height="${h}" rx="9"/>
+				<text class="cb-title" x="${x + 12}" y="${yy + 20}">${esc(title)}</text>
+				${sub ? `<text class="cb-sub" x="${x + 12}" y="${yy + 37}">${esc(sub)}</text>` : ''}
+				${sub2 ? `<text class="cb-sub" x="${x + 12}" y="${yy + 53}">${esc(sub2)}</text>` : ''}`;
+		};
+		const link = (x1, y1, x2, y2, cls, label) => {
+			const mx = (x1 + x2) / 2;
+			return `<path class="cb-link ${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>
+				${label ? `<text class="cb-rate" x="${mx}" y="${Math.min(y1, y2) - 8}" text-anchor="middle">${esc(label)}</text>` : ''}`;
+		};
+		const right = c => C[c][0] + C[c][1];
+		const wanUp = !!wan.up || !!wan.fallback;
+		const bh = 76;
+		const y0 = mid - bh / 2;
+		let svg = '';
+		svg += box('inet', y0 + 8, 60, lv(!!t.internet?.up), 'INTERNET', t.internet?.up ? `ping ${Math.round(t.internet.rtt_ms)} ms` : 'unreachable');
+		svg += box('gw', y0, bh, lv(wanUp), 'UPSTREAM ROUTER', wan.gateway || '—', `WAN ${wan.proto || ''}`);
+		svg += link(right('inet'), mid, C.gw[0], mid, lv(!!t.internet?.up));
+		const speed = (wan.link || '').match(/speed:(\d+)/)?.[1];
+		const zones = ['wan', 'openmiop', ts.installed ? 'tailscale' : '', srv?.configured || (ov?.connections || []).length ? 'vpn' : ''];
+		const bl = [
+			`WAN ${wan.ipaddr || wan.fallback || 'no address'}`,
+			`${wan.device || 'eth0.2'}${speed ? ` · ${speed} Mbit/s` : ''}`,
+			r.wanRx != null ? `WAN ${rate(r.wanRx, r.wanTx)}` : '',
+			'NAT · firewall · DNS · NTP',
+			svc.length ? `${svc.length} port forwards to the cluster` : 'no port forwards',
+			`zones: ${zones.filter(Boolean).join(', ')}`
+		].filter(Boolean);
+		const bH = 30 + bl.length * 16;
+		const [bx, bw] = C.bmc;
+		svg += `<rect class="cb-box ${lv(wanUp)}" x="${bx}" y="${mid - bH / 2}" width="${bw}" height="${bH}" rx="9"/>
+			<text class="cb-title" x="${bx + 12}" y="${mid - bH / 2 + 20}">${esc(`BMC · ${t.bmc?.hostname || 'ClusterBox'}`)}</text>
+			${bl.map((l, i) => `<text class="cb-sub" x="${bx + 12}" y="${mid - bH / 2 + 37 + i * 16}">${esc(l)}</text>`).join('')}`;
+		svg += link(right('gw'), mid, C.bmc[0], mid, lv(wanUp) + (r.wanRx > 50 ? ' flow' : ''));
+		for (const n of nets) {
+			const ny = n.y + n.h / 2;
+			svg += box('net', n.y + (n.h - 70) / 2, 70, n.lv, n.title, n.sub, n.sub2);
+			svg += link(right('bmc'), mid, C.net[0], ny, n.lv + (n.rate && r.omiTx > 50 ? ' flow' : ''));
+			n.ends.forEach((e, i) => {
+				const ey = n.y + i * (eh + eg);
+				svg += box('end', ey, eh, `${e.lv}${e.vip ? ' vip' : ''}`, e.title, e.sub);
+				svg += link(right('net'), ny, C.end[0], ey + eh / 2, e.lv === 'warn' ? 'down' : e.lv);
+			});
+		}
+		return `<div class="cb-net-wrap"><svg class="cb-topo" viewBox="0 0 ${W} ${H}" role="img" aria-label="Network topology of the Cluster Box">${svg}</svg></div>`;
+	}
+
+	// ---- OpenVPN (NETWORK > OPENVPN) --------------------------------------
+	// The server (remote access to the BMC and the blades; one .ovpn per
+	// client) and client connections from uploaded .ovpn files.
+
+	async renderOpenvpn(el) {
+		this.ovEl = el;
+		el.innerHTML = '<div class="stat-card cb-muted">Loading…</div>';
+		let ov;
+		try {
+			ov = await this.call('ovpn_list');
+		} catch (e) {
+			el.innerHTML = `<div class="stat-card cb-muted">OpenVPN status unavailable: ${this.esc(e.message)}</div>`;
+			return;
+		}
+		const s = ov.server || {};
+		const badge = (ok, on, off) => this.core.renderBadge(ok ? 'success' : 'warning', ok ? on : off);
+		const serverCard = s.configured
+			? `<div class="stat-card"><div class="section-title">OPENVPN SERVER</div>
+				<div class="cb-node-row"><span>State</span><span>${s.running ? this.core.renderBadge('success', 'RUNNING') : s.enabled ? this.core.renderBadge('error', 'NOT RUNNING') : this.core.renderBadge('warning', 'OFF')}</span></div>
+				<div class="cb-node-row"><span>Clients connect to</span><span class="cb-mono">${this.esc(s.host)} ${this.esc(s.proto)}/${this.esc(s.port)}</span></div>
+				<div class="cb-node-row"><span>Client addresses</span><span class="cb-mono">${this.esc(s.subnet)}</span></div>
+				<div class="cb-node-row"><span>Route pushed</span><span class="cb-mono">10.20.0.0/24 (blades)</span></div>
+				<div class="cb-node-row"><span>Server fingerprint</span><span class="cb-mono cb-fp" title="${this.esc(s.fingerprint)}">${this.esc((s.fingerprint || '').slice(0, 23))}…</span></div>
+				<p class="cb-muted" style="margin:10px 0">The WAN address of the BMC is usually private: forward ${this.esc(s.proto === 'udp' ? 'UDP' : 'TCP')} port ${this.esc(s.port)} to it on the upstream router.
+					Clients reach the BMC (web UI, SSH) and the blades.</p>
+				<div class="cb-node-actions">
+					<button class="action-btn-sm" data-ov="srv-toggle">${s.enabled ? 'TURN OFF' : 'TURN ON'}</button>
+					<button class="action-btn-sm" data-ov="srv-setup">SETTINGS</button>
+					<button class="action-btn-sm" data-ov="log" data-name="server">LOG</button>
+					<button class="action-btn-sm danger" data-ov="srv-remove">REMOVE SERVER</button>
+				</div>
+				<div class="section-title" style="margin-top:20px">CLIENTS</div>
+				<table class="data-table"><thead><tr><th>NAME</th><th>STATE</th><th>VPN ADDRESS</th><th>FROM</th><th>SINCE</th><th></th></tr></thead><tbody>
+				${(s.clients || []).map(c => `<tr><td>${this.esc(c.name)}</td><td>${badge(c.connected, 'CONNECTED', 'OFFLINE')}</td>
+					<td class="cb-mono">${this.esc(c.address || '')}</td><td class="cb-mono">${this.esc(c.real || '')}</td><td>${this.esc(c.since || '')}</td>
+					<td><button class="action-btn-sm" data-ov="cl-get" data-name="${this.esc(c.name)}">.OVPN</button>
+					<button class="action-btn-sm danger" data-ov="cl-del" data-name="${this.esc(c.name)}">DELETE</button></td></tr>`).join('') ||
+					'<tr><td colspan="6" class="cb-muted">No clients yet.</td></tr>'}
+				</tbody></table>
+				<div class="cb-node-actions"><input class="form-input cb-ov-name" id="cb-ov-new" placeholder="client name, e.g. laptop" maxlength="24">
+					<button class="action-btn-sm" data-ov="cl-add">ADD CLIENT AND DOWNLOAD .OVPN</button></div></div>`
+			: `<div class="stat-card"><div class="section-title">OPENVPN SERVER</div>
+				<p class="cb-muted" style="margin-bottom:12px">Remote access to the BMC and the blades' network (10.20.0.0/24) from a laptop or phone.
+					Every client gets its own .ovpn file; no certificate authority to manage: each side pins the other's certificate fingerprint.</p>
+				${this.ovServerForm({ port: '1194', proto: 'udp', subnet: '10.8.0.0/24', host: s.host || '' })}
+				<div class="cb-node-actions"><button class="action-btn-sm" data-ov="srv-create">SET UP THE SERVER</button></div></div>`;
+		const conns = ov.connections || [];
+		const connCard = `<div class="stat-card"><div class="section-title">CONNECTIONS TO OTHER VPN SERVERS</div>
+			<p class="cb-muted" style="margin-bottom:12px">The BMC connects out with an .ovpn file from the other side (an office, a cloud network).
+				Directives that run programs are refused.</p>
+			<table class="data-table"><thead><tr><th>NAME</th><th>SERVER</th><th>STATE</th><th></th></tr></thead><tbody>
+			${conns.map(c => `<tr><td>${this.esc(c.name)}${c.kind === 'luci' ? ' <span class="cb-muted">(LuCI)</span>' : ''}</td><td class="cb-mono">${this.esc(c.remote || '')}</td>
+				<td>${c.connected ? this.core.renderBadge('success', 'CONNECTED') : c.enabled ? this.core.renderBadge('warning', c.running ? 'CONNECTING' : 'NOT RUNNING') : this.core.renderBadge('warning', 'OFF')}</td>
+				<td>${c.kind === 'imported'
+					? `<button class="action-btn-sm" data-ov="cn-toggle" data-name="${this.esc(c.name)}" data-on="${c.enabled ? 0 : 1}">${c.enabled ? 'TURN OFF' : 'TURN ON'}</button>
+						<button class="action-btn-sm" data-ov="log" data-name="${this.esc(c.instance)}">LOG</button>
+						<button class="action-btn-sm danger" data-ov="cn-del" data-name="${this.esc(c.name)}">DELETE</button>`
+					: `<a class="action-btn-sm" href="/cgi-bin/luci/admin/vpn/openvpn" target="_blank" rel="noopener">LUCI</a>`}</td></tr>`).join('') ||
+				'<tr><td colspan="4" class="cb-muted">None.</td></tr>'}
+			</tbody></table>
+			<div class="cb-node-actions"><input class="form-input cb-ov-name" id="cb-ov-imp-name" placeholder="name, e.g. office" maxlength="24">
+				<input type="file" id="cb-ov-file" accept=".ovpn,.conf,text/plain" class="form-input cb-ov-file">
+				<button class="action-btn-sm" data-ov="cn-import">IMPORT .OVPN</button></div></div>`;
+		el.innerHTML = `${serverCard}<div style="height:16px"></div>${connCard}<pre class="cb-logs-text cb-ov-log" id="cb-ov-log" hidden></pre>`;
+		el.querySelectorAll('[data-ov]').forEach(b => (b.onclick = () => this.ovAction(b.dataset.ov, b.dataset, s)));
+	}
+
+	ovServerForm(v) {
+		return `<div class="cb-grid2">
+			<div class="form-group"><label class="form-label">ADDRESS CLIENTS CONNECT TO</label>
+				<input class="form-input" id="cb-ov-host" value="${this.esc(v.host)}" placeholder="public IP or DNS name"></div>
+			<div class="form-group"><label class="form-label">PORT AND PROTOCOL</label>
+				<div style="display:flex;gap:8px"><input class="form-input" id="cb-ov-port" value="${this.esc(v.port)}" style="max-width:110px">
+				<select class="form-input" id="cb-ov-proto"><option value="udp"${v.proto === 'udp' ? ' selected' : ''}>UDP</option>
+					<option value="tcp-server"${v.proto !== 'udp' ? ' selected' : ''}>TCP</option></select></div></div>
+			<div class="form-group"><label class="form-label">CLIENT ADDRESSES (/24)</label>
+				<input class="form-input" id="cb-ov-subnet" value="${this.esc(v.subnet)}"></div></div>`;
+	}
+
+	download(name, text) {
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-openvpn-profile' }));
+		a.download = name;
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(() => {
+			URL.revokeObjectURL(a.href);
+			a.remove();
+		}, 1000);
+	}
+
+	async ovAction(act, d, srv) {
+		const el = this.ovEl;
+		const q = id => el.querySelector(id);
+		const run = async (method, params, ok, timeout = 60000) => {
+			try {
+				const res = await this.call(method, params, 'clusterbox', timeout);
+				if (ok) this.core.showToast(ok, 'success');
+				return res;
+			} catch (e) {
+				this.core.showToast(e.message, 'error');
+				return null;
+			}
+		};
+		const form = () => ({ host: q('#cb-ov-host').value.trim(), port: q('#cb-ov-port').value.trim(), proto: q('#cb-ov-proto').value, subnet: q('#cb-ov-subnet').value.trim() });
+		if (act === 'srv-create') {
+			if (await run('ovpn_server_setup', form(), 'OpenVPN server set up')) this.renderOpenvpn(el);
+		} else if (act === 'srv-setup') {
+			const m = this.modal('OPENVPN SERVER', this.ovServerForm(srv),
+				'<button class="action-btn" data-b="cancel">CANCEL</button><button class="action-btn" data-b="save">SAVE</button>');
+			m.querySelector('[data-b="cancel"]').onclick = () => m.remove();
+			m.querySelector('[data-b="save"]').onclick = async () => {
+				const v = { host: m.querySelector('#cb-ov-host').value.trim(), port: m.querySelector('#cb-ov-port').value.trim(),
+					proto: m.querySelector('#cb-ov-proto').value, subnet: m.querySelector('#cb-ov-subnet').value.trim() };
+				if (await run('ovpn_server_setup', v, 'Saved; download the client files again if the address or port changed')) {
+					m.remove();
+					this.renderOpenvpn(el);
+				}
+			};
+		} else if (act === 'srv-toggle') {
+			if (await run('ovpn_server_enable', { enabled: srv.enabled ? '0' : '1' }, srv.enabled ? 'Server off' : 'Server on')) this.renderOpenvpn(el);
+		} else if (act === 'srv-remove') {
+			if (!confirm('Remove the OpenVPN server with all its client keys? Their .ovpn files stop working.')) return;
+			if (await run('ovpn_server_remove', {}, 'Server removed')) this.renderOpenvpn(el);
+		} else if (act === 'cl-add') {
+			const name = q('#cb-ov-new').value.trim();
+			const res = await run('ovpn_client_add', { name });
+			if (res?.text) {
+				this.download(`${name}.ovpn`, res.text);
+				this.core.showToast(`${name}.ovpn downloaded: import it into the OpenVPN app`, 'success');
+				this.renderOpenvpn(el);
+			}
+		} else if (act === 'cl-get') {
+			const res = await run('ovpn_client_get', { name: d.name });
+			if (res?.text) this.download(`${d.name}.ovpn`, res.text);
+		} else if (act === 'cl-del') {
+			if (!confirm(`Delete client ${d.name}? Its .ovpn file stops working.`)) return;
+			if (await run('ovpn_client_del', { name: d.name }, `${d.name} deleted`)) this.renderOpenvpn(el);
+		} else if (act === 'cn-import') {
+			const name = q('#cb-ov-imp-name').value.trim();
+			const file = q('#cb-ov-file').files[0];
+			if (!file) return this.core.showToast('Choose an .ovpn file', 'error');
+			if (file.size > 48 * 1024) return this.core.showToast('The file is larger than 48 KiB', 'error');
+			if (await run('ovpn_import', { name, config: await file.text() }, `${name}: imported, connecting`)) this.renderOpenvpn(el);
+		} else if (act === 'cn-toggle') {
+			if (await run('ovpn_enable', { name: d.name, enabled: d.on }, d.on === '1' ? 'Connecting' : 'Off')) this.renderOpenvpn(el);
+		} else if (act === 'cn-del') {
+			if (!confirm(`Delete connection ${d.name}?`)) return;
+			if (await run('ovpn_delete', { name: d.name }, `${d.name} deleted`)) this.renderOpenvpn(el);
+		} else if (act === 'log') {
+			const res = await run('ovpn_log', { name: d.name });
+			const pre = q('#cb-ov-log');
+			pre.hidden = false;
+			pre.textContent = res?.text || 'No log lines.';
+			pre.scrollIntoView({ block: 'nearest' });
+		}
 	}
 
 	// ---- console logs (nodectl archive on the eMMC, a file per boot) -------

@@ -1,0 +1,326 @@
+#!/bin/sh
+# OpenVPN on the BMC for the web UI (rpcd clusterbox ovpn_*).
+#
+# Server "cb_server": remote access to the BMC and the blades' network.
+# No CA: the server and every client have a self-signed EC certificate,
+# and each side pins the other's SHA-256 fingerprint (peer-fingerprint,
+# OpenVPN 2.6+). Removing a client = dropping its fingerprint. Keys stay
+# on the BMC in $DIR, so a client's .ovpn can be downloaded again.
+#
+# Client connections "cbc_<name>": .ovpn files uploaded in the web UI,
+# without directives that run programs.
+#
+#   ovpn list
+#   ovpn server-setup PORT PROTO SUBNET HOST     (SUBNET a.b.c.0/24)
+#   ovpn server-enable 0|1
+#   ovpn server-remove
+#   ovpn client-add NAME      prints the client's .ovpn
+#   ovpn client-get NAME      prints it again
+#   ovpn client-del NAME
+#   ovpn import NAME < file.ovpn
+#   ovpn enable NAME 0|1       (an imported connection)
+#   ovpn delete NAME
+#   ovpn log NAME
+
+. /usr/share/libubox/jshn.sh
+
+DIR=/etc/openvpn/cb
+SRV=cb_server
+DEV=tun-cb
+LOGLINES=60
+
+die() { echo "$*" >&2; exit 1; }
+
+valid_name() {
+	case "$1" in ''|*[!a-z0-9_-]*) return 1 ;; esac
+	[ ${#1} -le 24 ]
+}
+
+# SHA-256 fingerprint of a PEM certificate, as OpenVPN prints it.
+fingerprint() {
+	openssl x509 -in "$1" -noout -fingerprint -sha256 | sed 's/^.*=//'
+}
+
+newcert() { # name file-prefix
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+		-days 3650 -subj "/CN=$1" -keyout "$2.key" -out "$2.crt" >/dev/null 2>&1 &&
+		chmod 600 "$2.key"
+}
+
+srv() { uci -q get "openvpn.$SRV.$1"; }
+
+restart() {
+	/etc/init.d/openvpn restart "$1" >/dev/null 2>&1 || /etc/init.d/openvpn restart >/dev/null 2>&1
+}
+
+# Log lines of one OpenVPN instance (syslog tag "openvpn(<instance>)").
+ilog() { logread 2>/dev/null | grep -F "openvpn($1)"; }
+
+running() { # instance
+	ubus call service list '{"name":"openvpn"}' 2>/dev/null |
+		jsonfilter -e "@.openvpn.instances['$1'].running" 2>/dev/null | grep -q true
+}
+
+# Server config from the UCI settings and the client fingerprints.
+write_server_conf() {
+	local port proto net host f n
+	port=$(uci -q get clusterbox.ovpn.port); proto=$(uci -q get clusterbox.ovpn.proto)
+	net=$(uci -q get clusterbox.ovpn.subnet)
+	{
+		echo "# Written by /usr/libexec/clusterbox/ovpn; edit in the web UI."
+		echo "dev $DEV"
+		echo "dev-type tun"
+		echo "port $port"
+		echo "proto $proto"
+		echo "server ${net%/*} 255.255.255.0"
+		echo "topology subnet"
+		echo "push \"route 10.20.0.0 255.255.255.0\""
+		echo "cert $DIR/server.crt"
+		echo "key $DIR/server.key"
+		echo "dh none"
+		echo "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305"
+		echo "keepalive 10 60"
+		echo "persist-tun"
+		echo "status-version 2"
+		echo "verb 3"
+		echo "<peer-fingerprint>"
+		for f in "$DIR"/clients/*.crt; do
+			[ -f "$f" ] || continue
+			n=${f##*/}; n=${n%.crt}
+			echo "# $n"
+			fingerprint "$f"
+		done
+		echo "</peer-fingerprint>"
+	} > "$DIR/server.conf.new" && mv "$DIR/server.conf.new" "$DIR/server.conf"
+}
+
+client_conf() { # name
+	local n=$1 host port proto
+	host=$(uci -q get clusterbox.ovpn.host); port=$(uci -q get clusterbox.ovpn.port)
+	proto=$(uci -q get clusterbox.ovpn.proto)
+	[ "$proto" = tcp-server ] && proto=tcp-client
+	cat <<-EOF
+	# OpenVPN client "$n" for the Mixtile Cluster Box BMC ($(uci -q get system.@system[0].hostname)).
+	client
+	dev tun
+	proto $proto
+	remote $host $port
+	nobind
+	persist-tun
+	resolv-retry infinite
+	data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+	peer-fingerprint $(fingerprint "$DIR/server.crt")
+	verb 3
+	<cert>
+	$(cat "$DIR/clients/$n.crt")
+	</cert>
+	<key>
+	$(cat "$DIR/clients/$n.key")
+	</key>
+	EOF
+}
+
+firewall_server() { # on|off
+	local port proto zones
+	if [ "$1" = on ]; then
+		port=$(uci -q get clusterbox.ovpn.port); proto=$(uci -q get clusterbox.ovpn.proto)
+		uci -q batch <<-EOF
+			set firewall.cb_ovpn=rule
+			set firewall.cb_ovpn.name='ClusterBox: OpenVPN server'
+			set firewall.cb_ovpn.src='wan'
+			set firewall.cb_ovpn.proto='$proto'
+			set firewall.cb_ovpn.dest_port='$port'
+			set firewall.cb_ovpn.target='ACCEPT'
+		EOF
+		# Management (web UI, SSH) over the VPN.
+		zones=$(uci -q get clusterbox.admin.zones)
+		case " $zones " in *" vpn "*) ;; *) uci add_list clusterbox.admin.zones=vpn ;; esac
+	else
+		uci -q delete firewall.cb_ovpn
+	fi
+	uci commit firewall
+	uci commit clusterbox
+	/usr/libexec/clusterbox/apply all >/dev/null 2>&1
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+list() {
+	local s name kind en run remote
+	json_init
+	json_add_object server
+	if [ -f "$DIR/server.crt" ]; then
+		json_add_boolean configured 1
+		json_add_boolean enabled "$( [ "$(srv enabled)" = 1 ] && echo 1 || echo 0)"
+		json_add_boolean running "$(running $SRV && echo 1 || echo 0)"
+		json_add_string port "$(uci -q get clusterbox.ovpn.port)"
+		json_add_string proto "$(uci -q get clusterbox.ovpn.proto)"
+		json_add_string subnet "$(uci -q get clusterbox.ovpn.subnet)"
+		json_add_string host "$(uci -q get clusterbox.ovpn.host)"
+		json_add_string fingerprint "$(fingerprint "$DIR/server.crt")"
+		json_add_array clients
+		for f in "$DIR"/clients/*.crt; do
+			[ -f "$f" ] || continue
+			name=${f##*/}; name=${name%.crt}
+			json_add_object
+			json_add_string name "$name"
+			# status-version 2: CLIENT_LIST,cn,real,virtual,v6,rx,tx,since,since_t,...
+			awk -F, -v n="$name" '$1 == "CLIENT_LIST" && $2 == n { print $3; print $4; print $6; print $7; print $9; exit }' \
+				/var/run/openvpn.$SRV.status 2>/dev/null > /tmp/cb-ovpn.$$
+			if [ -s /tmp/cb-ovpn.$$ ]; then
+				json_add_boolean connected 1
+				{ read -r a; read -r b; read -r c; read -r d; read -r e; } < /tmp/cb-ovpn.$$
+				json_add_string real "$a"
+				json_add_string address "$b"
+				json_add_string rx "$c"
+				json_add_string tx "$d"
+				json_add_string since "$e"
+			else
+				json_add_boolean connected 0
+			fi
+			rm -f /tmp/cb-ovpn.$$
+			json_close_object
+		done
+		json_close_array
+	else
+		json_add_boolean configured 0
+		json_add_string host "$(ip -4 -o addr show "$(uci -q get network.wan.device || echo eth0.2)" 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4; exit }')"
+	fi
+	json_close_object
+	json_add_array connections
+	for s in $(uci -q show openvpn | sed -n 's/^openvpn\.\([^.=]*\)=openvpn$/\1/p'); do
+		[ "$s" = "$SRV" ] && continue
+		en=$(uci -q get "openvpn.$s.enabled")
+		case "$s" in
+		cbc_*) kind=imported ;;
+		# OpenWrt's samples, unless someone turned one on in LuCI.
+		sample_*|custom_config) [ "$en" = 1 ] || continue; kind=luci ;;
+		*) kind=luci ;;
+		esac
+		json_add_object
+		json_add_string name "${s#cbc_}"
+		json_add_string instance "$s"
+		json_add_string kind "$kind"
+		json_add_boolean enabled "$( [ "$en" = 1 ] && echo 1 || echo 0)"
+		json_add_boolean running "$(running "$s" && echo 1 || echo 0)"
+		remote=$(uci -q get "openvpn.$s.remote")
+		[ -n "$remote" ] || remote=$(sed -n 's/^[[:space:]]*remote[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*\([0-9]*\).*/\1 \2/p' \
+			"$(uci -q get "openvpn.$s.config")" 2>/dev/null | head -n 1)
+		json_add_string remote "$remote"
+		# Up when the last connection event is a completed start.
+		json_add_boolean connected "$(running "$s" && ilog "$s" |
+			grep -E 'Initialization Sequence Completed|Restart pause|process exiting|SIGUSR1|SIGTERM|SIGHUP' |
+			tail -n 1 | grep -q 'Initialization Sequence Completed' && echo 1 || echo 0)"
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+cmd=$1; shift
+case "$cmd" in
+list) list ;;
+server-setup)
+	port=$1 proto=$2 subnet=$3 host=$4
+	case "$port" in ''|*[!0-9]*) die "port: a number" ;; esac
+	[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "port: 1-65535"
+	case "$proto" in udp|tcp-server) ;; *) die "proto: udp or tcp-server" ;; esac
+	echo "$subnet" | grep -qE '^(10|172|192)\.[0-9]{1,3}\.[0-9]{1,3}\.0/24$' || die "subnet: a private a.b.c.0/24"
+	case "$subnet" in 10.20.0.0/24) die "subnet: 10.20.0.0/24 is the blades' network" ;; esac
+	echo "$host" | grep -qE '^[A-Za-z0-9.:-]{1,253}$' || die "host: the address clients connect to"
+	command -v openssl >/dev/null || die "openssl is missing"
+	mkdir -p "$DIR/clients" && chmod 700 "$DIR"
+	[ -f "$DIR/server.crt" ] || newcert "clusterbox-server" "$DIR/server" || die "server certificate failed"
+	uci -q get clusterbox.ovpn >/dev/null || uci set clusterbox.ovpn=ovpn
+	uci set clusterbox.ovpn.port="$port"
+	uci set clusterbox.ovpn.proto="$proto"
+	uci set clusterbox.ovpn.subnet="$subnet"
+	uci set clusterbox.ovpn.host="$host"
+	write_server_conf
+	uci -q batch <<-EOF
+		set openvpn.$SRV=openvpn
+		set openvpn.$SRV.enabled='1'
+		set openvpn.$SRV.config='$DIR/server.conf'
+	EOF
+	uci commit openvpn
+	firewall_server on
+	restart $SRV
+	echo "server on $proto/$port, clients get $subnet"
+	;;
+server-enable)
+	[ -f "$DIR/server.crt" ] || die "set the server up first"
+	uci set openvpn.$SRV.enabled="$([ "$1" = 1 ] && echo 1 || echo 0)"
+	uci commit openvpn
+	if [ "$1" = 1 ]; then firewall_server on; restart $SRV; else
+		/etc/init.d/openvpn stop $SRV >/dev/null 2>&1; firewall_server off; fi
+	echo ok
+	;;
+server-remove)
+	/etc/init.d/openvpn stop $SRV >/dev/null 2>&1
+	uci -q delete openvpn.$SRV; uci commit openvpn
+	uci -q delete clusterbox.ovpn
+	firewall_server off
+	rm -rf "$DIR/server.crt" "$DIR/server.key" "$DIR/server.conf" "$DIR/clients"
+	echo "removed"
+	;;
+client-add)
+	valid_name "$1" || die "name: a-z 0-9 _ -, at most 24"
+	[ -f "$DIR/server.crt" ] || die "set the server up first"
+	[ -f "$DIR/clients/$1.crt" ] && die "client $1 exists"
+	newcert "$1" "$DIR/clients/$1" || die "client certificate failed"
+	write_server_conf
+	running $SRV && restart $SRV
+	client_conf "$1"
+	;;
+client-get)
+	valid_name "$1" && [ -f "$DIR/clients/$1.crt" ] || die "no client $1"
+	client_conf "$1"
+	;;
+client-del)
+	valid_name "$1" && [ -f "$DIR/clients/$1.crt" ] || die "no client $1"
+	rm -f "$DIR/clients/$1.crt" "$DIR/clients/$1.key"
+	write_server_conf
+	running $SRV && restart $SRV
+	echo "deleted"
+	;;
+import)
+	valid_name "$1" || die "name: a-z 0-9 _ -, at most 24"
+	mkdir -p "$DIR/import" && chmod 700 "$DIR"
+	cat > "$DIR/import/$1.ovpn.new"
+	[ -s "$DIR/import/$1.ovpn.new" ] || { rm -f "$DIR/import/$1.ovpn.new"; die "empty file"; }
+	# Directives that run programs or read other files have no place in
+	# a file uploaded through the web UI.
+	bad=$(sed -n 's/^[[:space:]]*\([a-z-]*\).*/\1/p' "$DIR/import/$1.ovpn.new" |
+		grep -xE 'up|down|route-up|route-pre-down|ipchange|tls-verify|auth-user-pass-verify|client-connect|client-disconnect|learn-address|plugin|script-security|config|cd|chroot|daemon|writepid|log|log-append|status|management|setenv|setenv-safe|tmp-dir' | sort -u | tr '\n' ' ')
+	if [ -n "$bad" ]; then rm -f "$DIR/import/$1.ovpn.new"; die "not allowed in an uploaded config: $bad"; fi
+	grep -qE '^[[:space:]]*(client|tls-client|remote)([[:space:]]|$)' "$DIR/import/$1.ovpn.new" ||
+		{ rm -f "$DIR/import/$1.ovpn.new"; die "not a client config (no client / remote)"; }
+	mv "$DIR/import/$1.ovpn.new" "$DIR/import/$1.ovpn" && chmod 600 "$DIR/import/$1.ovpn"
+	uci -q batch <<-EOF
+		set openvpn.cbc_$1=openvpn
+		set openvpn.cbc_$1.enabled='1'
+		set openvpn.cbc_$1.config='$DIR/import/$1.ovpn'
+	EOF
+	uci commit openvpn
+	restart "cbc_$1"
+	echo "imported, connecting"
+	;;
+enable)
+	valid_name "$1" && uci -q get "openvpn.cbc_$1" >/dev/null || die "no connection $1"
+	uci set "openvpn.cbc_$1.enabled=$([ "$2" = 1 ] && echo 1 || echo 0)"
+	uci commit openvpn
+	if [ "$2" = 1 ]; then restart "cbc_$1"; else /etc/init.d/openvpn stop "cbc_$1" >/dev/null 2>&1; fi
+	echo ok
+	;;
+delete)
+	valid_name "$1" && uci -q get "openvpn.cbc_$1" >/dev/null || die "no connection $1"
+	/etc/init.d/openvpn stop "cbc_$1" >/dev/null 2>&1
+	uci -q delete "openvpn.cbc_$1"; uci commit openvpn
+	rm -f "$DIR/import/$1.ovpn"
+	echo "deleted"
+	;;
+log)
+	case "$1" in server) inst=$SRV ;; *) valid_name "$1" || die "name"; inst=$1; uci -q get "openvpn.$inst" >/dev/null || inst=cbc_$1 ;; esac
+	ilog "$inst" | tail -n $LOGLINES
+	;;
+*) die "usage: ovpn list|server-setup|server-enable|server-remove|client-add|client-get|client-del|import|enable|delete|log" ;;
+esac

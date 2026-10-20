@@ -95,6 +95,13 @@ if grep -q '^root:\$1\$asgYXbPb\$GqMnN2vjVOuEBEVPAXLhR\.:' "$SHADOW"; then
 	sed -i 's/^root:[^:]*:/root:*:/' "$SHADOW"
 fi
 
+# MoCI's WireGuard page: the firmware has had WireGuard since 25.12;
+# configs from before kept the page switched off.
+if [ -x /usr/bin/wg ] && [ "$(uci -q get moci.features.wireguard)" = 0 ]; then
+	uci set moci.features.wireguard=1
+	uci commit moci
+fi
+
 # Daily configuration snapshot.
 CRON=${CB_CRON:-/etc/crontabs/root}
 mkdir -p "${CRON%/*}"

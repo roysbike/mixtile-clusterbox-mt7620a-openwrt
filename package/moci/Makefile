@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 # upstream add-on feed (key, opkg feed) and the lighttpd parts.
 PKG_NAME:=moci
 PKG_VERSION:=0.2.0
-PKG_RELEASE:=6
+PKG_RELEASE:=7
 
 PKG_SOURCE_VERSION:=93e01c2cbccff1545716efb4335903d13359b865
 PKG_SOURCE:=moci-$(PKG_SOURCE_VERSION).tar.gz

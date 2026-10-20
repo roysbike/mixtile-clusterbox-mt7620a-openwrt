@@ -17,7 +17,10 @@
 					"console_read",
 					"console_grep",
 					"fw_status",
-						"info_get"
+						"info_get",
+						"ovpn_list",
+						"ovpn_log",
+						"ovpn_client_get"
 				],
 				"nodectl": [
 					"status",
@@ -58,7 +61,15 @@
 					"fw_check",
 					"fw_download",
 					"fw_install",
-						"info_set"
+						"info_set",
+						"ovpn_server_setup",
+						"ovpn_server_enable",
+						"ovpn_server_remove",
+						"ovpn_client_add",
+						"ovpn_client_del",
+						"ovpn_import",
+						"ovpn_enable",
+						"ovpn_delete"
 				],
 				"nodectl": [
 					"action",

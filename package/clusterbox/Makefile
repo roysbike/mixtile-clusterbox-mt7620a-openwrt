@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=clusterbox
 PKG_VERSION:=1.0
-PKG_RELEASE:=8
+PKG_RELEASE:=9
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -10,7 +10,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/clusterbox
 	CATEGORY:=Custom Component
 	TITLE:=ClusterBox BMC management backend (network layout, access, services, config history)
-	DEPENDS:=+rpcd +nodectl +jsonfilter
+	DEPENDS:=+rpcd +nodectl +jsonfilter +openssl-util
 	PKGARCH:=all
 endef
 
