@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Documentation: the BMC's serial console (3-pin UART header TX/RX/GND,
+  57600 8N1 per Mixtile, kernel console 115200), with Mixtile's pinout
+  PDF; README EN/RU.
+
+### Fixed
+
+- Documentation: the BMC has no microSD card. Kernel, rootfs and overlay
+  are on the on-board `mmcblk0` (U-Boot, its environment and factory data
+  on SPI flash). The "rewrite the microSD on a PC" recovery in the README
+  and the v0.1.0-rc release notes was wrong and is removed. README
+  Recovery: a BMC that does not boot is brought back with the factory
+  restore (hold reset while powering on until the LED blinks), then the
+  release is installed again; back up the configuration before every
+  update.
+- Documentation: known v0.3.0 issue, `/home/mixtile` belongs to root
+  (`mixtile` cannot create `~/.ssh`).
+
 ## [0.4.0-rc.1] - 2026-10-14
 
 The firmware moves from OpenWrt 23.05.2 (Linux 5.15.150) to OpenWrt
@@ -341,8 +360,8 @@ mixtile-talos v0.1.0-rc.2).
   on older firmware keep shadowing the new ones (seen on the lab BMC:
   `/usr/bin/openmiop-rc`, `/etc/init.d/openmiop`). `mixtile-update
   install`/`install-local` remove them.
-- `mixtile-update install` and the microSD recovery are still not
-  hardware-tested (rc.1 → rc.2 is the first OTA update).
+- `mixtile-update install` and recovery of a BMC that does not boot are
+  still not hardware-tested (rc.1 → rc.2 is the first OTA update).
 - No HTTPS in LuCI yet (no `px5g`); planned.
 - `uclient-fetch` uses mbedTLS 2.28 (TLS 1.2): it cannot talk to the
   Talos and Kubernetes APIs, which require TLS 1.3.
@@ -444,11 +463,11 @@ v0.1.0-rc.1.
 ### Known limitations
 
 - Not hardware-tested in this release: booting this firmware build on the
-  BMC, `mixtile-update install`/`install-local` (sysupgrade on the
-  microSD) and the microSD recovery procedure. The OpenMIOP helper and
+  BMC, `mixtile-update install`/`install-local` (sysupgrade to the
+  on-board `mmcblk0`) and recovery of a BMC that does not boot. The OpenMIOP helper and
   nodectl it contains were tested as separately installed binaries.
-- No A/B rootfs: a failed write needs recovery by rewriting the microSD
-  card. Releases are not signed yet (SHA-256 over HTTPS only); signing is
+- No A/B rootfs: a failed write needs the firmware rewritten outside
+  the BMC's OpenWrt (factory restore with the reset button). Releases are not signed yet (SHA-256 over HTTPS only); signing is
   required before a stable v1.0.
 - OpenMIOP: root-port re-enumeration pauses all fabric traffic ~1-2 s
   when a blade appears without a BAR address; a blade that disappears

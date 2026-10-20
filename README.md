@@ -157,7 +157,7 @@ Release assets:
 
 | File | Purpose |
 | --- | --- |
-| `openmiop-<version>-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin` | the firmware, written by sysupgrade to the BMC's microSD card |
+| `openmiop-<version>-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin` | the firmware, written by sysupgrade to the BMC's on-board storage (`mmcblk0`) |
 | `clusterbox-firmware.json` | board, target, version, commit, OpenMIOP protocol, image SHA-256 (read by `mixtile-update`) |
 | `mixtile-update` | update tool, for the first install from older firmware |
 | `SHA256SUMS`, `BUILD-INFO.txt` | checksums and build record |
@@ -240,17 +240,30 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
 * If the update fails before the reboot, nothing has been written and the
   old firmware keeps running (overlay files that were removed fall back to
   the old firmware's own copies).
-* The image is written to the microSD card (kernel at sector 16, rootfs
-  after it; partition table and overlay untouched). If the BMC does not
-  come back: take the microSD card out and write the same image on a PC
-  exactly as sysupgrade does, then reinsert it:
+* The BMC has no removable card. U-Boot, its environment and the
+  factory data sit on the SPI flash (`mtd0`-`mtd2`); kernel, rootfs and
+  overlay are on the on-board `mmcblk0` behind the MT7620A SD
+  controller. sysupgrade writes the image at sector 16 of `mmcblk0`
+  (kernel, then the squashfs rootfs at 10 MiB); partition table and
+  overlay (`mmcblk0p3`) stay as they are.
+* If the BMC does not come back after a write, restore the factory
+  firmware with the reset button: power the box off, hold the BMC's
+  reset button, power on and keep holding it until the LED starts
+  blinking, then release it. The BMC comes up with Mixtile's factory
+  firmware and factory settings; install the wanted ClusterBox release
+  again from there (LuCI *Flash Firmware*, see First install). Done on
+  the lab unit on 2026-10-14 after a firmware that did not boot. The
+  configuration is lost, so back it up before every update:
 
   ```sh
-  sudo dd if=openmiop-<version>-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin of=/dev/<sdcard> bs=512 seek=16 conv=fsync
+  sysupgrade -b /tmp/bmc-config.tar.gz   # then copy it off the BMC
+  uci export > /tmp/bmc-uci.txt          # readable copy
   ```
 
-  This needs the card's existing partition table (as shipped by Mixtile).
-  A blank card needs Mixtile's factory SD image first.
+  While the BMC is down, the blades lose their LAN as well (their
+  Ethernet goes through the BMC's switch). After the restore, set the
+  configuration up again (or restore the backup): e.g. the `omi0`
+  firewall zone, NAT rules and the NTP server the blades use.
 * Blades keep power while the BMC is down or rebooting; their OS keeps
   running. Every blade link resets; blades on pcie-ep-net v0.3 reconnect
   to each other after ~12 s by themselves, and the BMC (`omi0`
@@ -260,8 +273,30 @@ mixtile-update install --yes         # prunes the overlay as above, then sysupgr
   *Flash Firmware*) boots, `/etc/mixtile-release` and the LuCI login page
   show the build, the OpenMIOP fabric runs with four blades; check,
   download and verification of a release ran on that BMC. Not yet tested:
-  `mixtile-update install` (the rc.1 → rc.2 update is the first) and the
-  microSD recovery.
+  `mixtile-update install` (the rc.1 → rc.2 update is the first).
+
+### Serial console (BMC UART)
+
+The controller board has a 3-pin UART header for the MT7620A, next to a
+push button and the RTC battery, at the edge of the board. The pin header
+(2.54 mm) is not fitted: solder one in to use it. Pinout, left to right
+as in Mixtile's photo ([UART of Controller Board, PDF](https://downloads.mixtile.com/blade3/file/UART%20of%20Controller%20Board.pdf)):
+
+| Pin | Connect to (USB-UART adapter, e.g. FT232) |
+| --- | --- |
+| TX | RX |
+| RX | TX |
+| GND | GND |
+
+Use a 3.3 V adapter. Mixtile gives the baud rate as **57600** (8N1).
+This firmware's kernel command line sets `console=ttyS0,115200`: if the
+output turns to garbage after the boot loader, switch the terminal to
+115200. Not yet used on the lab unit; it is the way to see why a
+firmware does not boot.
+
+```sh
+picocom -b 57600 /dev/ttyUSB0      # Ctrl-A Ctrl-B to change the speed
+```
 
 ## Verify OpenMIOP on the BMC
 
@@ -309,8 +344,10 @@ Feeds are pinned to commits in `feeds.conf.default`.
   disappears without the leave handshake can race a BMC read and wedge
   the fabric (`omi-rc` never reads a blade). Full list:
   [pcie-ep-net](https://github.com/roysbike/pcie-ep-net#known-limitations).
-* Updates: install path and microSD recovery not hardware-tested; releases
-  not signed; no A/B rootfs (a failed write needs the microSD recovery).
+* Updates: releases not signed; no A/B rootfs (a firmware that does not
+  boot needs the factory restore with the reset button, see Recovery).
+* v0.3.0 image: `/home/mixtile` belongs to root, so `mixtile` cannot
+  create `~/.ssh`. Fix once: `chown mixtile:mixtile /home/mixtile`.
 
 ---
 
