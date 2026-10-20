@@ -59,3 +59,10 @@ config history 'history'
 # state of every node is checked every "interval" seconds.
 config avail 'avail'
 	option interval '20'
+
+# Description of the cluster on the web UI home page (EDIT there): name,
+# description, and per slot a name, role and note. The BMC does not see
+# Kubernetes; empty values fall back to the nodectl names.
+config cluster 'cluster'
+	option name ''
+	option description ''

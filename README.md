@@ -106,18 +106,32 @@ the overlay's upper directory, so firmware updates keep it.
 is powered, has its PCIe link and answers on its check port, and logs
 every change to `/overlay/log/clusterbox/availability`.
 
-In the web UI (**Cluster → Overview**): every node card shows the last
-24 hours as a bar (online, booting, no PCIe link, off, no data while the
-BMC was down), the share of time online and how long the node has been
-in its state; the topology map shows that duration too. **LOGS** opens
-the console log of a node: pick a boot, read it from the first line,
-follow new output, search the whole boot, download it.
+**The web UI opens on CLUSTER** (the MoCI dashboard of the BMC itself
+is under **BMC**):
 
-The top of the **Dashboard** sums the box up in tiles: nodes online, each
-blade (state, time in it, 24 h online share), PCIe fabric, BMC (load,
-memory, uptime), Internet, the forwarded cluster services (Kubernetes
-API, ingress: answering or not, checked every 30 s with `nodectl probe`)
-and Tailscale.
+* On top, the cluster: its name and description and the role and note
+  of every slot (**EDIT**, stored in `/etc/config/clusterbox`; the BMC
+  does not see Kubernetes, so the operator writes them), an overall
+  state and the key facts (nodes online, fabric, WAN, Internet,
+  Tailscale).
+* The box from the front, as it is built: the BMC on top (power, WAN and
+  PCIe switch LEDs, fan duty), the ASM2824 switch with its uplink, then
+  slots 1-4 from top to bottom. Every slot shows LEDs for power, PCIe
+  link and the node answering on its check port, the name, role, address
+  and link (Gen3 x2), the state and how long the node has been in it,
+  the last 24 hours as a bar (online, booting, no PCIe link, off, no data
+  while the BMC was down) with the online share, and CONSOLE, LOGS and
+  POWER (shut down, reboot, cut power, power on).
+* Beside it: health (nodes, fabric, Internet, WAN, the forwarded
+  services: answering or not, checked every 30 s with `nodectl probe`,
+  Tailscale, firmware, chassis), the traffic through the BMC over the
+  last 5 minutes (blade-to-blade traffic does not pass the BMC), the
+  forwarded services and the BMC's load, memory, uptime and firmware.
+
+The page asks the BMC once every 5 s (`clusterbox topology`), changes
+only the values that changed and stops while the browser tab is hidden.
+**LOGS** opens the console log of a node: pick a boot, read it from the
+first line, follow new output, search the whole boot, download it.
 
 **Firmware updates in the web UI.** The BMC looks for a new release
 itself (`mixtile-update watch`: 5 min after boot, then every 12 h; only a

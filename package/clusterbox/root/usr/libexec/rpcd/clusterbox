@@ -490,6 +490,53 @@ console_grep() {
 # found, the update in progress.
 MU=/usr/libexec/mixtile-update
 
+# Cluster description for the home page (UCI clusterbox.cluster and
+# clusterbox.node1..4): the BMC does not see Kubernetes, the operator
+# writes the names and roles. Newlines are kept as the two characters \n.
+INFO_NODE_KEYS="label role note"
+
+info_clean() {
+	printf '%s' "$1" | tr -d '\000-\011\013-\037' | sed ':a;N;$!ba;s/\n/\\n/g' | cut -c1-"$2"
+}
+
+info_get() {
+	local id k
+	json_init
+	json_add_string name "$(uci -q get clusterbox.cluster.name)"
+	json_add_string description "$(uci -q get clusterbox.cluster.description)"
+	json_add_object nodes
+	for id in 1 2 3 4; do
+		json_add_object "$id"
+		for k in $INFO_NODE_KEYS; do json_add_string "$k" "$(uci -q get clusterbox.node$id.$k)"; done
+		json_close_object
+	done
+	json_close_object
+	json_dump
+}
+
+info_set() {
+	local info name description id k v
+	json_get_vars info
+	json_load "$info" 2>/dev/null || { reply 2 "info: not JSON"; return; }
+	json_get_vars name description
+	uci -q get clusterbox.cluster >/dev/null || uci set clusterbox.cluster=cluster
+	uci set clusterbox.cluster.name="$(info_clean "$name" 64)"
+	uci set clusterbox.cluster.description="$(info_clean "$description" 400)"
+	if json_select nodes 2>/dev/null; then
+		for id in 1 2 3 4; do
+			json_select "$id" 2>/dev/null || continue
+			uci -q get clusterbox.node$id >/dev/null || uci set clusterbox.node$id=node
+			for k in $INFO_NODE_KEYS; do
+				v=; json_get_var v "$k"
+				uci set clusterbox.node$id.$k="$(info_clean "$v" 64)"
+			done
+			json_select ..
+		done
+		json_select ..
+	fi
+	uci commit clusterbox && reply 0 "saved" || reply 1 "uci commit failed"
+}
+
 fw_status() {
 	local st chk base p2
 	st=$("$MU" status 2>/dev/null); [ -n "$st" ] || st='{}'
@@ -538,6 +585,8 @@ list)
 		"console_read": { "node": 1, "name": "", "offset": 0, "length": 131072 },
 		"console_grep": { "node": 1, "boot": "", "pattern": "" },
 		"fw_status": {},
+		"info_get": {},
+		"info_set": { "info": "" },
 		"fw_check": {},
 		"fw_download": {},
 		"fw_install": {}
@@ -599,6 +648,8 @@ call)
 	console_read) console_read ;;
 	console_grep) console_grep ;;
 	fw_status) fw_status ;;
+	info_get) info_get ;;
+	info_set) info_set ;;
 	fw_check)
 		# Up to a minute with GitHub: longer than rpcd waits for a plugin.
 		( "$MU" check ) </dev/null >/dev/null 2>&1 &

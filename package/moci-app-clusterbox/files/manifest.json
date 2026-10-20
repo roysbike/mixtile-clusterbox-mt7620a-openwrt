@@ -8,5 +8,5 @@
 	"license": "GPL-2.0",
 	"css": "style.css",
 	"files": ["addon.js", "style.css"],
-	"nav": { "route": "/cluster", "label": "CLUSTER", "placement": "top" }
+	"nav": { "route": "/cluster", "label": "CLUSTER", "placement": "home" }
 }

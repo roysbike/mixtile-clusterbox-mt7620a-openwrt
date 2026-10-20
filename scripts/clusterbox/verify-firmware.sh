@@ -130,6 +130,12 @@ done
 # watch of mixtile-update runs at boot.
 ls "$r"/etc/rc.d/S*moci-version >/dev/null 2>&1 || fail "moci-version is not enabled at boot"
 grep -q 'version.txt' "$r/www/moci/index.html" || fail "MoCI index.html does not load versioned files"
+# The ClusterBox page is the start page (MoCI patch 005, add-on nav
+# placement "home") and its backend has the cluster description.
+grep -q "placement === 'home'" "$r/www/moci/js/core.js" || fail "MoCI core.js has no home add-on page"
+grep -q '"placement": "home"' "$r/www/moci/js/addons/cluster/manifest.json" || fail "ClusterBox add-on is not the start page"
+grep -q 'info_get' "$r/usr/libexec/rpcd/clusterbox" && grep -q 'info_set' "$r/usr/share/rpcd/acl.d/clusterbox.json" ||
+	fail "clusterbox backend or ACL has no cluster description (info_get/info_set)"
 grep -q 'watch) cmd_watch' "$r/usr/libexec/mixtile-update" || fail "mixtile-update has no background check"
 ls "$r"/etc/rc.d/S*mixtile-update >/dev/null 2>&1 || fail "mixtile-update is not enabled at boot"
 grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"

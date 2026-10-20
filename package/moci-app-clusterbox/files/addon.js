@@ -32,7 +32,6 @@ export default class ClusterBoxAddon {
 	constructor(core) {
 		this.core = core;
 		this.timer = null;
-		this.widgetTimer = null;
 		this.prev = null;
 		this.core.registerRoute('/cluster', (path, sub) => this.route(sub || []));
 	}
@@ -108,15 +107,8 @@ export default class ClusterBoxAddon {
 		};
 	}
 
-	getExtensions() {
-		return {
-			'dashboard:widget': { id: 'cb-dashboard-topology', render: el => this.renderWidget(el) }
-		};
-	}
-
 	cleanup() {
 		this.stopPolling();
-		clearInterval(this.widgetTimer);
 		this.closeLogs();
 		clearInterval(this.fwTimer);
 	}
@@ -201,30 +193,355 @@ export default class ClusterBoxAddon {
 		}
 	}
 
-	// ---- overview: topology + nodes ---------------------------------------
+	// ---- overview: the box from the front, and the cluster ---------------
+	// Built once; every poll only changes texts and classes (data-f keys),
+	// so the page stays light on the BMC and in the browser.
 
 	async loadOverview() {
 		const body = document.getElementById('cb-body');
-		body.innerHTML = `<div class="stat-card"><div class="section-title">TOPOLOGY</div><div id="cb-topo">Loading…</div></div>
-			<div class="section-title" style="margin-top:24px">NODES</div><div id="cb-nodes" class="cb-nodes"></div>`;
+		body.innerHTML = this.homeHtml();
+		this.hist = this.hist || { wanRx: [], wanTx: [], omiRx: [], omiTx: [] };
+		body.querySelector('[data-f="edit"]').addEventListener('click', () => this.editInfo());
+		// An open POWER menu closes on a click anywhere else.
+		if (!this.menuCloser) {
+			this.menuCloser = e => document.querySelectorAll('.cb-menu[open]').forEach(d => d.contains(e.target) || d.removeAttribute('open'));
+			document.addEventListener('click', this.menuCloser);
+		}
+		body.querySelectorAll('[data-act]').forEach(btn =>
+			btn.addEventListener('click', () => {
+				const bay = btn.closest('[data-slot]');
+				const id = Number(bay.dataset.slot);
+				btn.closest('details')?.removeAttribute('open');
+				if (btn.dataset.act === 'logs') this.openLogs(id, this.nodeLabel(id, this.lastNodes?.[id - 1]));
+				else this.nodeAction(id, btn.dataset.act);
+			})
+		);
 		const tick = async () => {
-			if (!document.getElementById('cb-topo')) return this.stopPolling();
-			try {
-				const t = await this.call('topology');
-				const rates = this.rates(t);
-				// The log is up to a minute behind: look again sooner when
-				// it disagrees with what the nodes show now.
-				if ((t.cluster?.nodes || []).some(n => this.availInfo?.[n.id] && this.availInfo[n.id].state !== this.nodeState(n)))
-					this.availAt = Math.min(this.availAt || 0, Date.now() - AVAIL_MS + 10000);
-				await this.loadAvailability();
-				document.getElementById('cb-topo').innerHTML = this.topologySvg(t, rates, false);
-				this.renderNodes(t);
-			} catch (e) {
-				document.getElementById('cb-topo').innerHTML = `<div class="cb-muted">Topology unavailable: ${this.esc(e.message)}</div>`;
+			if (!document.getElementById('cb-home')) return this.stopPolling();
+			if (!document.hidden) {
+				try {
+					const [t] = await Promise.all([this.call('topology'), this.info ? null : this.loadInfo()]);
+					// The log is up to a minute behind: look again sooner when
+					// it disagrees with what the nodes show now.
+					if ((t.cluster?.nodes || []).some(n => this.availInfo?.[n.id] && this.availInfo[n.id].state !== this.nodeState(n)))
+						this.availAt = Math.min(this.availAt || 0, Date.now() - AVAIL_MS + 10000);
+					await this.loadAvailability();
+					this.updateHome(t, this.rates(t));
+				} catch (e) {
+					this.homeError(e.message);
+				}
 			}
 			this.timer = setTimeout(tick, POLL_MS);
 		};
 		tick();
+	}
+
+	async loadInfo() {
+		try {
+			this.info = await this.call('info_get');
+			this.info.description = String(this.info.description || '').replace(/\\n/g, '\n');
+		} catch {
+			this.info = {};
+		}
+	}
+
+	// Name of the node as the operator set it (info), else nodectl's.
+	nodeLabel(id, n) {
+		return this.info?.nodes?.[id]?.label || n?.name || `blade${id}`;
+	}
+
+	homeHtml() {
+		const led = (k, title) => `<span class="cb-led" data-f="${k}" title="${title}"></span>`;
+		const bay = id => `
+			<div class="cb-bay" data-slot="${id}">
+				<div class="cb-bay-plate"><span>SLOT</span><b>${id}</b></div>
+				<div class="cb-bay-leds">${led('pwr', 'power')}${led('pcie', 'PCIe link')}${led('net', 'answers on its check port')}</div>
+				<div class="cb-bay-main">
+					<div class="cb-bay-line"><span class="cb-bay-name" data-f="name">blade${id}</span>
+						<span class="cb-chip" data-f="role" hidden></span><span class="cb-state" data-f="state">…</span></div>
+					<div class="cb-bay-line cb-mono cb-dim" data-f="facts"></div>
+					<div class="cb-bay-av"><div data-f="av"></div><span class="cb-dim" data-f="avtext"></span></div>
+				</div>
+				<div class="cb-bay-actions">
+					<button class="action-btn-sm" data-act="console" data-f="console">CONSOLE</button>
+					<button class="action-btn-sm" data-act="logs">LOGS</button>
+					<details class="cb-menu"><summary class="action-btn-sm">POWER</summary><div class="cb-menu-list" data-f="power"></div></details>
+				</div>
+			</div>`;
+		const row = (k, label) => `<div class="cb-hrow" data-f="h-${k}"><span class="cb-dot"></span><span>${label}</span><span class="cb-hval" data-f="hv-${k}">…</span></div>`;
+		const traffic = (k, label) => `<div class="cb-traffic">
+				<div class="cb-traffic-head"><span>${label}</span><span class="cb-mono" data-f="${k}-rate"></span></div>
+				<svg class="cb-spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
+					<polyline class="rx" data-f="${k}-rx" points=""/><polyline class="tx" data-f="${k}-tx" points=""/></svg></div>`;
+		return `<div id="cb-home" class="cb-home">
+			<div class="cb-home-head stat-card">
+				<div class="cb-home-title">
+					<div><div class="cb-kicker">CLUSTER</div><h3 data-f="cname">Mixtile Cluster Box</h3></div>
+					<span class="cb-pill" data-f="overall">…</span>
+				</div>
+				<p class="cb-desc" data-f="cdesc"></p>
+				<div class="cb-facts" data-f="cfacts"></div>
+				<button class="action-btn-sm cb-edit" data-f="edit">EDIT</button>
+			</div>
+			<div class="cb-home-grid">
+				<div class="cb-side">
+				<div class="cb-chassis" aria-label="Cluster Box, front view">
+					<div class="cb-bay cb-bay-bmc">
+						<div class="cb-bay-plate"><span>CTRL</span><b>BMC</b></div>
+						<div class="cb-bay-leds">${led('b-pwr', 'external power')}${led('b-wan', 'WAN')}${led('b-sw', 'PCIe switch')}</div>
+						<div class="cb-bay-main">
+							<div class="cb-bay-line"><span class="cb-bay-name">MT7620A · OpenWrt</span><span class="cb-state" data-f="b-state">…</span></div>
+							<div class="cb-bay-line cb-mono cb-dim" data-f="b-facts"></div>
+							<div class="cb-bay-line cb-mono cb-dim" data-f="b-facts2"></div>
+						</div>
+						<div class="cb-fan" data-f="fan" title="fan duty"></div>
+					</div>
+					<div class="cb-backplane"><span>PCIe SWITCH ASM2824</span><span class="cb-mono" data-f="sw"></span></div>
+					${[1, 2, 3, 4].map(bay).join('')}
+				</div>
+				<div class="stat-card cb-card"><div class="section-title">SERVICES FORWARDED TO THE BLADES</div><div data-f="svc"></div></div>
+				</div>
+				<div class="cb-side">
+					<div class="stat-card cb-card"><div class="section-title">HEALTH</div>
+						${row('nodes', 'Nodes')}${row('fabric', 'PCIe fabric')}${row('inet', 'Internet')}${row('wan', 'WAN')}
+						${row('svc', 'Services')}${row('ts', 'Tailscale')}${row('fw', 'Firmware')}${row('chassis', 'Chassis')}</div>
+					<div class="stat-card cb-card"><div class="section-title">TRAFFIC THROUGH THE BMC</div>
+						${traffic('wan', 'Internet (WAN)')}${traffic('omi', 'Blades ↔ BMC gateway')}
+						<div class="cb-dim cb-note">Blade-to-blade traffic goes through the PCIe switch, not through the BMC.</div></div>
+					<div class="stat-card cb-card"><div class="section-title">BMC</div>
+						<div class="cb-kv"><span>Load</span><span data-f="bmc-load"></span></div>
+						<div class="cb-kv"><span>Memory</span><span data-f="bmc-mem"></span></div>
+						<div class="cb-bar"><i data-f="bmc-membar"></i></div>
+						<div class="cb-kv"><span>Uptime</span><span data-f="bmc-up"></span></div>
+						<div class="cb-kv"><span>Firmware</span><span class="cb-mono" data-f="bmc-fw"></span></div></div>
+				</div>
+			</div>
+			<div class="cb-home-err cb-muted" data-f="err" hidden></div>
+		</div>`;
+	}
+
+	// Set text / class / attribute of the element with data-f="key" only
+	// when it changes.
+	f(root, key) {
+		return root.querySelector(`[data-f="${key}"]`);
+	}
+
+	put(el, text) {
+		if (el && el.textContent !== text) el.textContent = text;
+	}
+
+	level(el, lv) {
+		if (!el) return;
+		const cur = el.dataset.lv;
+		if (cur === lv) return;
+		if (cur) el.classList.remove(cur);
+		if (lv) el.classList.add(lv);
+		el.dataset.lv = lv || '';
+	}
+
+	homeError(msg) {
+		const root = document.getElementById('cb-home');
+		if (!root) return;
+		const el = this.f(root, 'err');
+		el.hidden = false;
+		this.put(el, `No data from the BMC: ${msg}`);
+		this.level(this.f(root, 'overall'), 'bad');
+		this.put(this.f(root, 'overall'), 'NO DATA');
+	}
+
+	updateHome(t, r) {
+		const root = document.getElementById('cb-home');
+		if (!root) return;
+		this.f(root, 'err').hidden = true;
+		const info = this.info || {};
+		const nodes = t.cluster?.nodes || [];
+		const byId = {};
+		for (const n of nodes) byId[Number(n.id)] = n;
+		this.lastNodes = [1, 2, 3, 4].map(id => byId[id]);
+		const states = this.lastNodes.map(n => (n ? this.nodeState(n) : 'unknown'));
+		const online = states.filter(s => s === 'online').length;
+		const lv = { online: 'ok', booting: 'warn', busy: 'warn', nolink: 'bad', off: 'off', unknown: 'off' };
+		const wan = t.wan || {};
+		const pcie = t.pcie || {};
+		const bmc = t.bmc || {};
+		const ch = t.cluster?.chassis || {};
+		const svc = t.services || [];
+		const svcUp = svc.filter(x => x.up === '1').length;
+		const uplink = (pcie.uplink || '').split('|');
+
+		// Cluster head.
+		this.put(this.f(root, 'cname'), info.name || 'Mixtile Cluster Box');
+		const desc = this.f(root, 'cdesc');
+		this.put(desc, info.description || 'No description yet: EDIT names the cluster, describes it and sets the role of every node.');
+		desc.classList.toggle('cb-dim', !info.description);
+		const problems = [];
+		if (states.includes('nolink')) problems.push('bad');
+		if (!pcie.switch) problems.push('bad');
+		if (states.some(s => s !== 'online') || !t.internet?.up || svcUp < svc.length) problems.push('warn');
+		const overall = problems.includes('bad') ? 'bad' : problems.length ? 'warn' : 'ok';
+		this.level(this.f(root, 'overall'), overall);
+		this.put(this.f(root, 'overall'), `${overall === 'ok' ? 'HEALTHY' : overall === 'warn' ? 'ATTENTION' : 'PROBLEM'} · ${online}/4 ONLINE`);
+		const facts = [
+			['Nodes', `${online}/4 online`],
+			['Fabric', pcie.omi0 ? `omi0 · ${pcie.omi_driver || ''}` : 'down'],
+			['WAN', wan.ipaddr || wan.fallback || 'no address'],
+			['Internet', t.internet?.up ? `${Math.round(t.internet.rtt_ms)} ms` : 'unreachable'],
+			['Remote', t.tailscale?.state === 'Running' ? `Tailscale ${t.tailscale.ipaddr || ''}` : 'Tailscale off']
+		];
+		const fe = this.f(root, 'cfacts');
+		const fh = facts.map(([k, v]) => `<span><em>${this.esc(k)}</em>${this.esc(v)}</span>`).join('');
+		if (fe.dataset.h !== fh) {
+			fe.innerHTML = fh;
+			fe.dataset.h = fh;
+		}
+
+		// BMC bay.
+		this.level(this.f(root, 'b-pwr'), ch.ext_power === false ? 'warn' : 'ok');
+		this.level(this.f(root, 'b-wan'), wan.up ? 'ok' : wan.fallback ? 'warn' : 'bad');
+		this.level(this.f(root, 'b-sw'), pcie.switch ? (pcie.omi0 ? 'ok' : 'warn') : 'bad');
+		const bst = this.f(root, 'b-state');
+		this.level(bst, wan.up || wan.fallback ? 'ok' : 'bad');
+		this.put(bst, `up ${this.fmtDur(bmc.uptime || 0)}`);
+		this.put(this.f(root, 'b-facts'), [wan.ipaddr || wan.fallback || 'no WAN address', (wan.link || '').match(/speed:(\d+)/)?.[1] ? `${wan.link.match(/speed:(\d+)/)[1]} Mbit/s` : '', bmc.hostname].filter(Boolean).join(' · '));
+		this.put(this.f(root, 'b-facts2'), [`omi0 10.20.0.1`, this.shortVersion(bmc.firmware)].join(' · '));
+		const fan = this.f(root, 'fan');
+		this.put(fan, ch.fan_duty != null ? `FAN ${ch.fan_duty}%` : 'FAN');
+		fan.style.setProperty('--cb-fan-s', ch.fan_duty ? `${(2.4 - (ch.fan_duty / 100) * 1.8).toFixed(2)}s` : '0s');
+		this.put(this.f(root, 'sw'), pcie.switch ? `to BMC ${uplink[0] ? `${uplink[0].replace(' PCIe', '')} x${uplink[1]}` : ''} · ${nodes.filter(n => n.pcie_link).length}/4 blade links` : 'not found');
+		this.level(root.querySelector('.cb-backplane'), pcie.switch ? 'ok' : 'bad');
+
+		// Blade bays.
+		this.lastNodes.forEach((n, i) => {
+			const id = i + 1;
+			const bay = root.querySelector(`[data-slot="${id}"]`);
+			const st = states[i];
+			const meta = info.nodes?.[id] || {};
+			this.level(bay, lv[st]);
+			this.put(this.f(bay, 'name'), this.nodeLabel(id, n));
+			const role = this.f(bay, 'role');
+			role.hidden = !meta.role;
+			this.put(role, meta.role || '');
+			const av = this.availInfo?.[id];
+			const dur = av?.since && av.state === st ? ` · ${this.fmtDur(av.now - av.since)}` : '';
+			const se = this.f(bay, 'state');
+			this.level(se, lv[st]);
+			this.put(se, `${(AV_TEXT[st] || st).toUpperCase()}${dur}`);
+			this.level(this.f(bay, 'pwr'), n?.power ? 'ok' : n?.power === false ? 'off' : '');
+			this.level(this.f(bay, 'pcie'), n?.pcie_link ? 'ok' : n?.power ? 'bad' : 'off');
+			this.level(this.f(bay, 'net'), n?.reachable ? 'ok' : n?.power && n?.pcie_link ? 'warn' : 'off');
+			this.put(this.f(bay, 'facts'), [n?.ipaddr || 'no address', n?.pcie_link ? this.linkText(n.link_gen, n.link_width) : n?.power ? 'no PCIe link' : 'no link',
+				meta.note || '', n?.busy ? `nodectl: ${n.busy}` : ''].filter(Boolean).join(' · '));
+			const avEl = this.f(bay, 'av');
+			const avh = av ? this.availStrip(av) : '';
+			if (avEl.dataset.h !== avh) {
+				avEl.innerHTML = avh;
+				avEl.dataset.h = avh;
+			}
+			this.put(this.f(bay, 'avtext'), av?.pct != null ? `${av.pct >= 99.95 ? '100' : av.pct.toFixed(1)}% online, 24 h` : '');
+			this.f(bay, 'console').disabled = !n?.tty_present;
+			const pw = this.f(bay, 'power');
+			const acts = n?.power ? [['shutdown', 'SHUT DOWN'], ['reboot', 'REBOOT'], ['poweroff', 'CUT POWER']] : [['poweron', 'POWER ON']];
+			const ph = acts.map(([a, l]) => `<button class="action-btn-sm${a === 'poweroff' ? ' danger' : ''}" data-pact="${a}">${l}</button>`).join('');
+			if (pw.dataset.h !== ph) {
+				pw.innerHTML = ph;
+				pw.dataset.h = ph;
+				pw.querySelectorAll('[data-pact]').forEach(b =>
+					b.addEventListener('click', () => {
+						b.closest('details')?.removeAttribute('open');
+						this.nodeAction(id, b.dataset.pact);
+					})
+				);
+			}
+		});
+
+		// Health.
+		const h = (k, level, text) => {
+			this.level(this.f(root, `h-${k}`), level);
+			this.put(this.f(root, `hv-${k}`), text);
+		};
+		const worst = states.includes('nolink') ? 'bad' : states.some(s => s !== 'online') ? 'warn' : 'ok';
+		h('nodes', worst, `${online}/4 online · ${nodes.filter(n => n.pcie_link).length}/4 PCIe`);
+		h('fabric', !pcie.switch ? 'bad' : pcie.omi0 ? 'ok' : 'warn', pcie.switch ? (pcie.omi0 ? `omi0 up · ${pcie.omi_driver}` : 'omi0 down') : 'no switch');
+		h('inet', t.internet?.up ? 'ok' : 'bad', t.internet?.up ? `${Math.round(t.internet.rtt_ms)} ms` : 'unreachable');
+		h('wan', wan.up ? 'ok' : wan.fallback ? 'warn' : 'bad', wan.up ? `${wan.proto || ''} ${wan.ipaddr || ''}`.trim() : wan.fallback ? `fallback ${wan.fallback}` : 'down');
+		h('svc', !svc.length ? 'off' : svcUp === svc.length ? 'ok' : svcUp ? 'warn' : 'bad', svc.length ? `${svcUp}/${svc.length} up` : 'none');
+		h('ts', !t.tailscale?.installed ? 'off' : t.tailscale.state === 'Running' ? 'ok' : 'off', t.tailscale?.installed ? t.tailscale.state || 'off' : 'not installed');
+		const u = this.fw?.updater || {};
+		h('fw', u.update_available ? 'warn' : 'ok', u.update_available && u.latest_version ? `${u.latest_version} available` : this.shortVersion(bmc.firmware).replace(/ \(.*\)$/, ''));
+		h('chassis', ch.ext_power === false ? 'warn' : 'ok', [ch.ext_power === false ? 'no external power' : 'power ok', ch.fan_duty != null ? `fan ${ch.fan_duty}%` : '',
+			ch.temp_mc != null ? `${(ch.temp_mc / 1000).toFixed(0)} °C` : ''].filter(Boolean).join(' · '));
+
+		// Traffic sparklines: the last 60 polls (5 min).
+		const hs = this.hist;
+		for (const k of ['wanRx', 'wanTx', 'omiRx', 'omiTx']) {
+			if (r[k] != null) hs[k].push(r[k]);
+			if (hs[k].length > 60) hs[k].shift();
+		}
+		const spark = (k, rx, tx) => {
+			const max = Math.max(1, ...hs[rx], ...hs[tx]);
+			const pts = a => a.map((v, i) => `${((i + 60 - a.length) * 120 / 59).toFixed(1)},${(29 - (v / max) * 27).toFixed(1)}`).join(' ');
+			this.f(root, `${k}-rx`).setAttribute('points', pts(hs[rx]));
+			this.f(root, `${k}-tx`).setAttribute('points', pts(hs[tx]));
+			this.put(this.f(root, `${k}-rate`), r[rx] == null ? '…' : `↓ ${this.fmtRate(r[rx])}  ↑ ${this.fmtRate(r[tx])}`);
+		};
+		spark('wan', 'wanRx', 'wanTx');
+		spark('omi', 'omiTx', 'omiRx');
+
+		// Services.
+		const sv = this.f(root, 'svc');
+		const svh = svc.length
+			? svc.map(x => `<div class="cb-svc ${x.up === '1' ? 'ok' : 'bad'}"><span class="cb-dot"></span><span>${this.esc(x.name)}</span>
+				<span class="cb-mono cb-dim">:${this.esc(x.port)} → ${this.esc(x.target)}</span></div>`).join('')
+			: '<div class="cb-muted">No services forwarded to the blades (SERVICES tab).</div>';
+		if (sv.dataset.h !== svh) {
+			sv.innerHTML = svh;
+			sv.dataset.h = svh;
+		}
+
+		// BMC.
+		const mem = bmc.mem_total_kb ? (1 - bmc.mem_avail_kb / bmc.mem_total_kb) * 100 : null;
+		this.put(this.f(root, 'bmc-load'), bmc.load || '');
+		this.put(this.f(root, 'bmc-mem'), mem == null ? '' : `${Math.round((bmc.mem_total_kb - bmc.mem_avail_kb) / 1024)} / ${Math.round(bmc.mem_total_kb / 1024)} MB (${mem.toFixed(0)}%)`);
+		this.f(root, 'bmc-membar').style.width = `${mem || 0}%`;
+		this.put(this.f(root, 'bmc-up'), this.fmtDur(bmc.uptime || 0));
+		this.put(this.f(root, 'bmc-fw'), this.shortVersion(bmc.firmware));
+	}
+
+	// Cluster name, description, node labels and roles (clusterbox UCI):
+	// the BMC does not see Kubernetes, so the operator writes them.
+	editInfo() {
+		const info = this.info || {};
+		const nodes = this.lastNodes || [];
+		const body = `
+			<div class="form-group"><label class="form-label">CLUSTER NAME</label>
+				<input class="form-input" id="cb-i-name" maxlength="64" value="${this.esc(info.name || '')}" placeholder="Mixtile Cluster Box"></div>
+			<div class="form-group"><label class="form-label">DESCRIPTION</label>
+				<textarea class="form-input" id="cb-i-desc" rows="3" maxlength="400" placeholder="What runs here, who to call">${this.esc(info.description || '')}</textarea></div>
+			<div class="cb-i-nodes">${[1, 2, 3, 4].map(id => {
+				const m = info.nodes?.[id] || {};
+				return `<div class="cb-i-node"><b>SLOT ${id}</b>
+					<input class="form-input" data-i="label" data-id="${id}" maxlength="32" value="${this.esc(m.label || '')}" placeholder="${this.esc(nodes[id - 1]?.name || `blade${id}`)}" aria-label="slot ${id} name">
+					<input class="form-input" data-i="role" data-id="${id}" maxlength="32" value="${this.esc(m.role || '')}" placeholder="role, e.g. control plane" aria-label="slot ${id} role">
+					<input class="form-input" data-i="note" data-id="${id}" maxlength="64" value="${this.esc(m.note || '')}" placeholder="note" aria-label="slot ${id} note"></div>`;
+			}).join('')}</div>`;
+		const m = this.modal('CLUSTER DESCRIPTION', body,
+			'<button class="action-btn" data-b="cancel">CANCEL</button><button class="action-btn" data-b="save">SAVE</button>');
+		m.querySelector('.modal-content').classList.add('cb-i-modal');
+		m.querySelector('[data-b="cancel"]').onclick = () => m.remove();
+		m.querySelector('[data-b="save"]').onclick = async () => {
+			const data = { name: m.querySelector('#cb-i-name').value.trim(), description: m.querySelector('#cb-i-desc').value.trim(), nodes: {} };
+			m.querySelectorAll('[data-i]').forEach(inp => {
+				(data.nodes[inp.dataset.id] = data.nodes[inp.dataset.id] || {})[inp.dataset.i] = inp.value.trim();
+			});
+			try {
+				await this.call('info_set', { info: JSON.stringify(data) });
+				this.info = data;
+				m.remove();
+				this.core.showToast('Saved', 'success');
+			} catch (e) {
+				this.core.showToast(`Save failed: ${e.message}`, 'error');
+			}
+		};
 	}
 
 	rates(t) {
@@ -239,124 +556,6 @@ export default class ClusterBoxAddon {
 		};
 		this.prev = { time: now, wanRx: t.wan?.rx_bytes, wanTx: t.wan?.tx_bytes, omiRx: t.pcie?.rx_bytes, omiTx: t.pcie?.tx_bytes };
 		return r;
-	}
-
-	// Internet -> gateway -> BMC -> PCIe switch -> 4 blades, left to right.
-	// Columns leave gaps for the traffic labels between the boxes.
-	topologySvg(t, r, compact) {
-		const nodes = t.cluster?.nodes || [];
-		const list = nodes.length ? nodes : [1, 2, 3, 4].map(id => ({ id, name: `blade${id}`, power: null }));
-		const C = { inet: [10, 150], gw: [200, 160], bmc: [440, 200], sw: [720, 170], node: [950, 210] };
-		const W = 1170;
-		const bh = compact ? 46 : 64;
-		const rowH = compact ? 52 : 74;
-		const top = 48;
-		const H = Math.max(top + list.length * rowH + 8, 200);
-		const mid = top + (list.length * rowH) / 2 - 4;
-		const lines = compact ? 2 : 3;
-		const box = (col, y, h, cls, title, sub, sub2) => {
-			const [x, w] = C[col] || col;
-			return `<rect class="cb-box ${cls}" x="${x}" y="${y}" width="${w}" height="${h}" rx="10"/>
-				<text class="cb-title" x="${x + 12}" y="${y + 21}">${this.esc(title)}</text>
-				${sub && lines > 1 ? `<text class="cb-sub" x="${x + 12}" y="${y + 38}">${this.esc(sub)}</text>` : ''}
-				${sub2 && lines > 2 ? `<text class="cb-sub" x="${x + 12}" y="${y + 54}">${this.esc(sub2)}</text>` : ''}`;
-		};
-		const link = (x1, y1, x2, y2, cls, l1, l2) => {
-			const mx = (x1 + x2) / 2;
-			return `<path class="cb-link ${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>
-				${l1 ? `<text class="cb-rate" x="${mx}" y="${y1 - 10}" text-anchor="middle">${this.esc(l1)}</text>` : ''}
-				${l2 ? `<text class="cb-rate" x="${mx}" y="${y1 + 18}" text-anchor="middle">${this.esc(l2)}</text>` : ''}`;
-		};
-		const right = c => C[c][0] + C[c][1];
-		const inet = t.internet || {};
-		const wan = t.wan || {};
-		const pcie = t.pcie || {};
-		const ts = t.tailscale || {};
-		const wanUp = !!wan.up || !!wan.fallback;
-		const flow = k => (k != null && k > 50 ? ' flow' : '');
-		const down = k => (r && k != null ? `↓ ${this.fmtRate(k)}` : '');
-		const upr = k => (r && k != null ? `↑ ${this.fmtRate(k)}` : '');
-		const y0 = mid - bh / 2;
-		let svg = '';
-
-		svg += box('inet', y0, bh, inet.up ? 'up' : 'down', 'INTERNET', inet.up ? `ping ${inet.rtt_ms} ms` : 'unreachable');
-		svg += box('gw', y0, bh, wanUp ? 'up' : 'down', 'GATEWAY', wan.gateway || '—', wan.proto ? `WAN ${wan.proto}` : '');
-		svg += link(right('inet'), mid, C.gw[0], mid, inet.up ? 'up' : 'down');
-
-		const addr = wan.fallback ? `${wan.fallback} (fallback)` : wan.ipaddr || 'no address';
-		svg += box('bmc', y0, bh, wanUp ? 'up' : 'down', 'BMC · MT7620A', addr,
-			`load ${(t.bmc?.load || '').split(' ')[0] || '?'} · ${t.bmc?.firmware || ''}`);
-		svg += link(right('gw'), mid, C.bmc[0], mid, (wanUp ? 'up' : 'down') + flow(r?.wanRx), down(r?.wanRx), upr(r?.wanTx));
-
-		if (ts.installed) {
-			const ok = ts.state === 'Running';
-			svg += box('bmc', 4, 30, ok ? 'up' : 'off', `TAILSCALE ${ok ? ts.ipaddr || '' : (ts.state || 'off').toUpperCase()}`);
-			svg += `<path class="cb-link ${ok ? 'up' : 'off'}" d="M${C.bmc[0] + C.bmc[1] / 2},34 L${C.bmc[0] + C.bmc[1] / 2},${y0}"/>`;
-		}
-
-		const swOk = !!pcie.switch;
-		const up = (pcie.uplink || '').split('|');
-		svg += box('sw', y0, bh, swOk ? 'up' : 'down', 'PCIe SWITCH', swOk ? 'ASM2824' : 'not found',
-			up[0] ? `to BMC ${up[0].replace(' PCIe', '')} x${up[1]}` : '');
-		const omiOk = swOk && pcie.omi0;
-		svg += link(right('bmc'), mid, C.sw[0], mid, (omiOk ? 'up' : 'down') + flow(r?.omiRx),
-			compact ? '' : down(r?.omiRx) || (pcie.omi_driver ? `omi0 · ${pcie.omi_driver}` : ''), compact ? '' : upr(r?.omiTx));
-
-		list.forEach((n, i) => {
-			const y = top + i * rowH;
-			const h = rowH - 10;
-			const cls = n.power === false ? 'off' : n.pcie_link ? 'up' : n.power ? 'down' : 'off';
-			const sub = n.power === false ? 'powered off'
-				: [this.linkText(n.link_gen, n.link_width) || (n.power ? 'no PCIe link' : 'unknown'), `slot ${n.id}`].join(' · ');
-			const av = this.availInfo?.[n.id];
-			const sub2 = [n.ipaddr, n.reachable === true ? 'online' : n.reachable === false ? 'no answer' : '',
-				av?.since && av.state === this.nodeState(n) ? this.fmtDur(av.now - av.since) : ''].filter(Boolean).join(' · ');
-			svg += box('node', y, h, cls, (n.name || `blade${n.id}`).toUpperCase(), sub, sub2);
-			svg += link(right('sw'), mid, C.node[0], y + h / 2, cls === 'up' ? 'up' : cls === 'off' ? 'off' : 'down');
-		});
-		return `<svg class="cb-topo" viewBox="0 0 ${W} ${H}" role="img" aria-label="ClusterBox topology">${svg}</svg>`;
-	}
-
-	renderNodes(t) {
-		const el = document.getElementById('cb-nodes');
-		if (!el) return;
-		const nodes = t.cluster?.nodes || [];
-		if (!nodes.length) {
-			el.innerHTML = `<div class="stat-card cb-muted">No node data: nodectl cannot reach the backplane (power and reset lines).</div>`;
-			return;
-		}
-		const b = (ok, yes, no) => this.core.renderBadge(ok ? 'success' : 'error', ok ? yes : no);
-		el.innerHTML = nodes
-			.map(n => {
-				const id = Number(n.id);
-				const state = n.busy ? this.core.renderBadge('warning', String(n.busy).toUpperCase())
-					: n.power ? (n.reachable ? this.core.renderBadge('success', 'ONLINE') : this.core.renderBadge('warning', 'BOOTING'))
-					: this.core.renderBadge('error', 'OFF');
-				return `<div class="stat-card cb-node">
-					<div class="cb-node-head"><span class="cb-node-name">${this.esc((n.name || `blade${id}`).toUpperCase())}</span>${state}</div>
-					<div class="cb-node-row"><span>Slot</span><span>${id}</span></div>
-					<div class="cb-node-row"><span>Power</span><span>${b(n.power, 'ON', 'OFF')}</span></div>
-					<div class="cb-node-row"><span>PCIe</span><span>${n.pcie_link ? this.esc(this.linkText(n.link_gen, n.link_width) || 'link') : this.core.renderBadge('error', 'DOWN')}</span></div>
-					<div class="cb-node-row"><span>Address</span><span class="cb-mono">${this.esc(n.ipaddr || '—')}</span></div>
-					<div class="cb-node-row"><span>Console</span><span>${n.tty_present ? 'serial' : '—'}</span></div>
-					${this.availCard(n)}
-					<div class="cb-node-actions">
-						${n.power ? `<button class="action-btn-sm" data-node="${id}" data-act="shutdown">SHUTDOWN</button>
-							<button class="action-btn-sm" data-node="${id}" data-act="reboot">REBOOT</button>
-							<button class="action-btn-sm danger" data-node="${id}" data-act="poweroff">POWER OFF</button>`
-						: `<button class="action-btn-sm" data-node="${id}" data-act="poweron">POWER ON</button>`}
-						${n.tty_present ? `<button class="action-btn-sm" data-node="${id}" data-act="console">CONSOLE</button>` : ''}
-						<button class="action-btn-sm" data-node="${id}" data-name="${this.esc(n.name || `blade${id}`)}" data-act="logs">LOGS</button>
-					</div></div>`;
-			})
-			.join('');
-		el.querySelectorAll('[data-act]').forEach(btn =>
-			btn.addEventListener('click', () =>
-				btn.dataset.act === 'logs'
-					? this.openLogs(Number(btn.dataset.node), btn.dataset.name)
-					: this.nodeAction(Number(btn.dataset.node), btn.dataset.act)
-			)
-		);
 	}
 
 	async nodeAction(node, act) {
@@ -458,18 +657,6 @@ export default class ClusterBoxAddon {
 		if (!n.power) return 'off';
 		if (!n.pcie_link) return 'nolink';
 		return n.reachable ? 'online' : 'booting';
-	}
-
-	availCard(n) {
-		const av = this.availInfo?.[Number(n.id)];
-		if (!av) return '';
-		const st = this.nodeState(n);
-		const pct = av.pct == null ? '—' : `${av.pct >= 99.95 ? '100' : av.pct.toFixed(1)}%`;
-		const since = av.since && av.state === st ? `${AV_TEXT[st]} for ${this.fmtDur(av.now - av.since)}` : AV_TEXT[st] || st;
-		return `<div class="cb-node-row"><span>Online, 24 h</span><span>${pct}</span></div>
-			<div class="cb-node-row"><span>State</span><span>${this.esc(since)}</span></div>
-			${this.availStrip(av)}
-			<div class="cb-av-axis"><span>24 h ago</span><span>now</span></div>`;
 	}
 
 	fmtDur(s) {
@@ -767,102 +954,6 @@ export default class ClusterBoxAddon {
 	}
 
 	// ---- dashboard widget ----------------------------------------------
-
-	renderWidget(el) {
-		el.innerHTML = `<div class="stat-card"><div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-			CLUSTERBOX <button class="action-btn-sm" id="cb-widget-open">OPEN</button></div><div id="cb-widget">Loading…</div></div>`;
-		el.querySelector('#cb-widget-open').addEventListener('click', () => this.core.navigate('/cluster'));
-		const tick = async () => {
-			const box = document.getElementById('cb-widget');
-			if (!box) return clearInterval(this.widgetTimer);
-			try {
-				const t = await this.call('topology');
-				await this.loadAvailability();
-				box.innerHTML = this.topologySvg(t, null, true);
-				this.renderSummary(t);
-			} catch (e) {
-				box.innerHTML = `<div class="cb-muted">${this.esc(e.message)}</div>`;
-				this.renderSummary(null, e.message);
-			}
-		};
-		clearInterval(this.widgetTimer);
-		tick();
-		this.widgetTimer = setInterval(tick, POLL_MS * 2);
-	}
-
-	// Health of the whole box at the top of the dashboard: one tile per
-	// component, coloured by its state; a click opens the cluster page.
-	renderSummary(t, err) {
-		const page = document.getElementById('dashboard-page');
-		if (!page) return;
-		let el = document.getElementById('cb-dash-summary');
-		if (!el) {
-			el = document.createElement('div');
-			el.id = 'cb-dash-summary';
-			el.className = 'cb-sum';
-			el.addEventListener('click', e => e.target.closest('.cb-tile') && this.core.navigate('/cluster'));
-			page.prepend(el);
-		}
-		if (!t) {
-			el.innerHTML = this.tile('bad', 'CLUSTERBOX', 'no data', err || '');
-			return;
-		}
-		const nodes = t.cluster?.nodes || [];
-		const states = nodes.map(n => this.nodeState(n));
-		const online = states.filter(s => s === 'online').length;
-		const level = { online: 'ok', booting: 'warn', busy: 'warn', nolink: 'bad', off: 'off', unknown: 'off' };
-		const worst = states.includes('nolink') ? 'bad' : states.some(s => s !== 'online') ? 'warn' : 'ok';
-		const linked = nodes.filter(n => n.pcie_link).length;
-		const pcie = t.pcie || {};
-		const up = (pcie.uplink || '').split('|');
-		const svc = t.services || [];
-		const svcUp = svc.filter(x => x.up === '1').length;
-		const bmc = t.bmc || {};
-		const mem = bmc.mem_total_kb ? Math.round((1 - bmc.mem_avail_kb / bmc.mem_total_kb) * 100) : null;
-		const load = parseFloat((bmc.load || '').split(' ')[0]);
-		const tiles = [
-			this.tile(nodes.length ? worst : 'off', 'CLUSTER', `${online}/${nodes.length || 4} online`,
-				nodes.length ? `PCIe links ${linked}/${nodes.length}` : 'no node data')
-		];
-		nodes.forEach((n, i) => {
-			const st = states[i];
-			const av = this.availInfo?.[n.id];
-			const dur = av?.since && av.state === st ? ` · ${this.fmtDur(av.now - av.since)}` : '';
-			const pct = av?.pct != null ? ` · ${av.pct >= 99.95 ? '100' : av.pct.toFixed(1)}% 24h` : '';
-			tiles.push(this.tile(level[st] || 'off', (n.name || `blade${n.id}`).toUpperCase(), `${AV_TEXT[st] || st}${dur}`,
-				`${n.ipaddr || `slot ${n.id}`}${pct}`));
-		});
-		tiles.push(
-			this.tile(!pcie.switch ? 'bad' : pcie.omi0 ? 'ok' : 'warn', 'PCIe FABRIC', pcie.switch ? 'ASM2824' : 'no switch',
-				[up[0] ? `uplink ${up[0].replace(' PCIe', '')} x${up[1]}` : '', pcie.omi_driver || 'no omi driver'].filter(Boolean).join(' · ')),
-			this.tile(mem > 90 || load > 4 ? 'warn' : 'ok', 'BMC', `load ${isNaN(load) ? '?' : load.toFixed(2)}`,
-				[mem != null ? `mem ${mem}%` : '', `up ${this.fmtDur(bmc.uptime || 0)}`, bmc.firmware || ''].filter(Boolean).join(' · ')),
-			this.tile(t.internet?.up ? 'ok' : t.wan?.up ? 'warn' : 'bad', 'INTERNET', t.internet?.up ? `${Math.round(t.internet.rtt_ms)} ms` : 'unreachable',
-				`WAN ${t.wan?.ipaddr || t.wan?.fallback || 'no address'}`)
-		);
-		if (svc.length)
-			tiles.push(this.tile(svcUp === svc.length ? 'ok' : svcUp ? 'warn' : 'bad', 'SERVICES', `${svcUp}/${svc.length} up`,
-				svc.some(x => x.up === '0')
-					? `down: ${svc.filter(x => x.up === '0').map(x => x.name).join(', ')}`
-					: svc.map(x => x.name).join(' · ')));
-		if (t.tailscale?.installed)
-			tiles.push(this.tile(t.tailscale.state === 'Running' ? 'ok' : 'off', 'TAILSCALE', t.tailscale.state || 'off', t.tailscale.ipaddr || ''));
-		const fw = this.fw;
-		if (fw) {
-			const u = fw.updater || {};
-			const avail = u.update_available && u.latest_version;
-			tiles.push(this.tile(avail ? 'warn' : 'ok', 'FIRMWARE', this.shortVersion(u.current_version).replace(/ \(.*\)$/, ''),
-				avail ? `${u.latest_version} available` : RELEASE_RE.test(u.current_version || '') ? 'up to date' : `development build · OpenWrt ${fw.openwrt}`));
-		}
-		el.innerHTML = tiles.join('');
-	}
-
-	tile(level, title, value, sub) {
-		return `<div class="stat-card cb-tile ${level}" title="Open the cluster page">
-			<div class="cb-tile-title">${this.esc(title)}</div>
-			<div class="cb-tile-value">${this.esc(value)}</div>
-			${sub ? `<div class="cb-tile-sub">${this.esc(sub)}</div>` : ''}</div>`;
-	}
 
 	// ---- firmware (mixtile-update) ---------------------------------------
 
