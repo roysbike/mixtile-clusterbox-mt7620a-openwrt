@@ -1,0 +1,80 @@
+ClusterBox start page: an add-on with nav placement "home" (the
+ClusterBox add-on) is the first menu entry and the page MoCI opens
+without a route; the MoCI dashboard stays as "BMC". The dashboard poll
+(every 3 s) only starts when the dashboard is shown: opened on another
+route it ran in the background until the first route change. An add-on
+may contribute a list to one extension point (several network tabs).
+The VPN tab is named WIREGUARD (the ClusterBox add-on adds OPENVPN).
+
+--- a/moci/index.html
++++ b/moci/index.html
+@@ -75,7 +75,7 @@
+ 						<span></span><span></span><span></span>
+ 					</button>
+ 					<nav class="nav">
+-						<a href="#/dashboard" class="active">DASHBOARD</a>
++						<a href="#/dashboard">BMC</a>
+ 						<a href="#/network">NETWORK</a>
+ 						<a href="#/system">SYSTEM</a>
+ 						<a href="#/addons" data-feature="addons">ADD-ONS</a>
+@@ -198,7 +198,7 @@
+ 							<button class="tab-btn" data-tab="dns">DNS & HOSTS</button>
+ 							<button class="tab-btn" data-tab="ddns">DDNS</button>
+ 							<button class="tab-btn" data-tab="qos">QOS</button>
+-							<button class="tab-btn" data-tab="vpn">VPN</button>
++							<button class="tab-btn" data-tab="vpn">WIREGUARD</button>
+ 							<button class="tab-btn" data-tab="diagnostics">DIAGNOSTICS</button>
+ 						</div>
+ 
+--- a/moci/js/core.js
++++ b/moci/js/core.js
+@@ -40,7 +40,7 @@
+ 	async handleRouteChange() {
+ 		if (!this.sessionId) return;
+ 
+-		const hash = window.location.hash.slice(1) || '/dashboard';
++		const hash = window.location.hash.slice(1) || this.homeRoute || '/dashboard';
+ 		const [basePath, ...subPaths] = hash.split('/').filter(Boolean);
+ 		const fullPath = `/${basePath}${subPaths.length ? '/' + subPaths.join('/') : ''}`;
+ 
+@@ -221,12 +221,14 @@
+ 		window.addEventListener('hashchange', () => this.handleRouteChange());
+ 
+ 		if (!window.location.hash) {
+-			this.navigate('/dashboard');
++			this.navigate(this.homeRoute || '/dashboard');
+ 		} else {
+ 			this.handleRouteChange();
+ 		}
+ 
+-		if (this.modules.has('dashboard')) {
++		// Only while the dashboard is shown; handleRouteChange starts and
++		// stops it on every route change.
++		if (this.modules.has('dashboard') && /^#\/dashboard(\/|$)/.test(window.location.hash)) {
+ 			this.startPolling();
+ 		}
+ 	}
+@@ -718,8 +720,9 @@
+ 			this.addons.set(id, instance);
+ 			if (typeof instance.getExtensions === 'function') {
+ 				const extensions = instance.getExtensions();
++				// One contribution, or a list of them (several network tabs).
+ 				for (const [pointName, contribution] of Object.entries(extensions)) {
+-					this.registerExtension(pointName, { ...contribution, _addonId: id });
++					for (const c of [].concat(contribution)) this.registerExtension(pointName, { ...c, _addonId: id });
+ 				}
+ 			}
+ 			return instance;
+@@ -762,7 +765,11 @@
+ 		const nav = document.querySelector('.nav');
+ 		if (!nav) return;
+ 
+-		if (manifest.nav.placement === 'top') {
++		if (manifest.nav.placement === 'home') {
++			// The add-on's page is the start page: first in the menu.
++			this.homeRoute = manifest.nav.route;
++			nav.insertBefore(link, nav.firstChild);
++		} else if (manifest.nav.placement === 'top') {
+ 			const addonsLink = nav.querySelector('a[href="#/addons"]');
+ 			if (addonsLink) {
+ 				nav.insertBefore(link, addonsLink);

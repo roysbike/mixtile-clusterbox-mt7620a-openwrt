@@ -35,7 +35,6 @@
 #include <linux/lockdep.h>
 #include <linux/ar8216_platform.h>
 #include <linux/workqueue.h>
-#include <linux/version.h>
 
 #include "ar8216.h"
 
@@ -1419,8 +1418,7 @@ ar8xxx_sw_reset_switch(struct switch_dev *dev)
 	int i;
 
 	mutex_lock(&priv->reg_mutex);
-	memset(&priv->vlan, 0, sizeof(struct ar8xxx_priv) -
-		offsetof(struct ar8xxx_priv, vlan));
+	memset(&priv->ar8xxx_priv_volatile, 0, sizeof(priv->ar8xxx_priv_volatile));
 
 	for (i = 0; i < dev->vlans; i++)
 		priv->vlan_id[i] = i;
@@ -2459,7 +2457,7 @@ ar8xxx_phy_config_init(struct phy_device *phydev)
 	/* VID fixup only needed on ar8216 */
 	if (chip_is_ar8216(priv)) {
 		dev->phy_ptr = priv;
-		dev->extra_priv_flags |= IFF_NO_IP_ALIGN;
+		dev->priv_flags |= IFF_NO_IP_ALIGN;
 		dev->eth_mangle_rx = ar8216_mangle_rx;
 		dev->eth_mangle_tx = ar8216_mangle_tx;
 	}
@@ -2694,7 +2692,7 @@ ar8xxx_phy_detach(struct phy_device *phydev)
 
 #ifdef CONFIG_ETHERNET_PACKET_MANGLE
 	dev->phy_ptr = NULL;
-	dev->extra_priv_flags &= ~IFF_NO_IP_ALIGN;
+	dev->priv_flags &= ~IFF_NO_IP_ALIGN;
 	dev->eth_mangle_rx = NULL;
 	dev->eth_mangle_tx = NULL;
 #endif

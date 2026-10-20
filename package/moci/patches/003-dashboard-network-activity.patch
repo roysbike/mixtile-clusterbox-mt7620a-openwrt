@@ -1,0 +1,68 @@
+Network activity on the dashboard: rates in kbit/s over the real poll
+interval (formatRate() takes kbit/s; it got KiB/s over a fixed 3 s),
+/proc/net/dev parsed at the colon (big counters follow it without a
+space, which shifted the columns), a VLAN parent not counted twice,
+the canvas sized once visible and the scale written on the graph.
+
+--- a/moci/js/modules/dashboard.js
++++ b/moci/js/modules/dashboard.js
+@@ -125,21 +125,27 @@
+ 
+ 			let totalRx = 0,
+ 				totalTx = 0;
+-			result.data
++			// "name: rx ..."; with big counters there is no space after the
++			// colon. A VLAN parent (eth0 under eth0.2) is not counted twice.
++			const lines = result.data
+ 				.split('\n')
+ 				.slice(2)
+-				.forEach(line => {
+-					if (!line.trim()) return;
+-					const parts = line.trim().split(/\s+/);
+-					if (parts[0].startsWith('lo:')) return;
+-					totalRx += parseInt(parts[1]) || 0;
+-					totalTx += parseInt(parts[9]) || 0;
+-				});
++				.filter(l => l.includes(':'));
++			const names = lines.map(l => l.slice(0, l.indexOf(':')).trim());
++			lines.forEach((line, i) => {
++				const name = names[i];
++				if (name === 'lo' || names.some(n => n.startsWith(name + '.'))) return;
++				const parts = line.slice(line.indexOf(':') + 1).trim().split(/\s+/);
++				totalRx += parseInt(parts[0]) || 0;
++				totalTx += parseInt(parts[8]) || 0;
++			});
+ 
+-			const current = { rx: totalRx, tx: totalTx };
++			const current = { rx: totalRx, tx: totalTx, time: Date.now() };
+ 			if (this.lastNetStats) {
+-				const rxRate = Math.max(0, current.rx - this.lastNetStats.rx) / 1024 / 3;
+-				const txRate = Math.max(0, current.tx - this.lastNetStats.tx) / 1024 / 3;
++				// kbit/s, as formatRate() takes them
++				const dt = (current.time - this.lastNetStats.time) / 1000 || 3;
++				const rxRate = (Math.max(0, current.rx - this.lastNetStats.rx) * 8) / 1000 / dt;
++				const txRate = (Math.max(0, current.tx - this.lastNetStats.tx) * 8) / 1000 / dt;
+ 
+ 				const downEl = document.getElementById('bandwidth-down');
+ 				const upEl = document.getElementById('bandwidth-up');
+@@ -333,6 +339,9 @@
+ 
+ 	updateBandwidthGraph() {
+ 		if (!this.bandwidthCtx || !this.bandwidthCanvas) return;
++		// Sized while the page was hidden: 0 px wide.
++		const w = this.bandwidthCanvas.offsetWidth;
++		if (w && this.bandwidthCanvas.width !== w) this.bandwidthCanvas.width = w;
+ 
+ 		const ctx = this.bandwidthCtx;
+ 		const { width, height } = this.bandwidthCanvas;
+@@ -359,5 +368,10 @@
+ 
+ 		this.drawSeries(downData, max, stepX, padding, height, 'rgba(226, 226, 229, 0.15)', 'rgba(226, 226, 229, 0.9)');
+ 		this.drawSeries(upData, max, stepX, padding, height, 'rgba(226, 226, 229, 0.08)', 'rgba(226, 226, 229, 0.5)');
++
++		// Scale: the top grid line.
++		ctx.fillStyle = 'rgba(226, 226, 229, 0.6)';
++		ctx.font = '11px monospace';
++		ctx.fillText(this.core.formatRate(max), padding + 4, padding - 6);
+ 	}
+ }

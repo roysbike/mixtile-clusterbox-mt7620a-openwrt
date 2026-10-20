@@ -53,16 +53,12 @@ list)
 		"action": { "node": 1, "action": "poweron", "force": false, "hard": false },
 		"rescan": {},
 		"console": { "node": 1, "mode": "serial" },
-		"flash": { "node": 1, "source": "", "target": "", "reboot": true },
 		"log": { "node": 1 },
 		"console_log": { "node": 1, "bytes": 16384 },
 		"send": { "node": 1, "text": "" },
 		"fan": { "duty": 85 },
 		"leases": {},
-		"pubkey": {},
-		"pxe": {},
-		"pxe_delete": { "name": "" },
-		"pxe_enable": { "enable": true, "bootfile": "" }
+		"pubkey": {}
 	}
 	EOF
 	;;
@@ -131,27 +127,6 @@ call)
 		json_add_int port "$(uci -q get ttyd.nodectl.port || echo 7682)"
 		json_dump
 		;;
-	flash)
-		json_get_vars node source target reboot
-		case "$node" in 1|2|3|4) ;; *) reply 2 "invalid node"; exit 0 ;; esac
-		case "$source" in
-			/*|http://*|https://*) ;;
-			*) reply 2 "source must be an absolute path or an http(s) URL"; exit 0 ;;
-		esac
-		if [ -n "$target" ]; then
-			case "$target" in
-				/dev/*) ;;
-				*) reply 2 "target must be a /dev path"; exit 0 ;;
-			esac
-			case "$target" in
-				*[!A-Za-z0-9/_.-]*) reply 2 "invalid characters in target"; exit 0 ;;
-			esac
-		fi
-		set -- flash -n "$node" -f "$source" -y --bg
-		[ -n "$target" ] && set -- "$@" --target "$target"
-		[ "$reboot" = 0 ] && set -- "$@" --no-reboot
-		run "$@"
-		;;
 	log)
 		json_get_vars node
 		case "$node" in 1|2|3|4) f=/var/log/nodectl/node$node.log ;; *) f=/var/log/nodectl/all.log ;; esac
@@ -204,58 +179,6 @@ call)
 		json_init
 		json_add_string pubkey "$(dropbearkey -y -f "$SSH_KEY" 2>/dev/null | grep -E '^(ssh-|ecdsa-)')"
 		json_dump
-		;;
-	pxe)
-		mkdir -p /opt/pxe
-		json_init
-		json_add_string root /opt/pxe
-		json_add_string http "http://$(uci -q get network.lan.ipaddr || echo 169.192.1.1)/pxe/"
-		json_add_boolean tftp "$(uci -q get dhcp.@dnsmasq[0].enable_tftp)"
-		json_add_string tftp_root "$(uci -q get dhcp.@dnsmasq[0].tftp_root)"
-		json_add_string bootfile "$(uci -q get dhcp.@dnsmasq[0].dhcp_boot)"
-		json_add_array files
-		for f in /opt/pxe/*; do
-			[ -f "$f" ] || continue
-			json_add_object
-			json_add_string name "${f##*/}"
-			json_add_int size "$(wc -c < "$f")"
-			json_close_object
-		done
-		json_close_array
-		json_dump
-		;;
-	pxe_delete)
-		json_get_vars name
-		case "$name" in
-			''|*/*|.*) reply 2 "invalid name"; exit 0 ;;
-			*[!A-Za-z0-9._+-]*) reply 2 "invalid name"; exit 0 ;;
-		esac
-		rm -f "/opt/pxe/$name"
-		reply 0 "deleted"
-		;;
-	pxe_enable)
-		json_get_vars enable bootfile
-		mkdir -p /opt/pxe /www
-		[ -L /www/pxe ] || [ -d /www/pxe ] || ln -s /opt/pxe /www/pxe
-		if [ "$enable" = 0 ]; then
-			uci -q delete dhcp.@dnsmasq[0].enable_tftp
-			uci -q delete dhcp.@dnsmasq[0].tftp_root
-			uci -q delete dhcp.@dnsmasq[0].dhcp_boot
-		else
-			if [ -n "$bootfile" ]; then
-				case "$bootfile" in
-					*/*|.*) reply 2 "invalid bootfile"; exit 0 ;;
-					*[!A-Za-z0-9._+-]*) reply 2 "invalid bootfile"; exit 0 ;;
-				esac
-				[ -f "/opt/pxe/$bootfile" ] || { reply 2 "bootfile not in /opt/pxe"; exit 0; }
-			fi
-			uci -q set dhcp.@dnsmasq[0].enable_tftp=1
-			uci -q set dhcp.@dnsmasq[0].tftp_root=/opt/pxe
-			[ -n "$bootfile" ] && uci -q set dhcp.@dnsmasq[0].dhcp_boot="$bootfile"
-		fi
-		uci -q commit dhcp
-		/etc/init.d/dnsmasq reload
-		reply 0 "ok"
 		;;
 	esac
 	;;

@@ -1,12 +1,62 @@
 # Changelog
 
-ClusterBox BMC firmware (OpenWrt 23.05 on the Mixtile Cluster Box MT7620A).
+ClusterBox BMC firmware (OpenWrt on the Mixtile Cluster Box MT7620A; 25.12 from
+v0.4.0, 23.05 before).
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
+The firmware on OpenWrt 25.12.6 (Linux 6.12.112) with a new web UI, the
+BMC part of OpenMIOP Stack v0.6.0. Runs on the lab Cluster Box since
+2026-10-19 (development builds, every one flashed and checked with four
+blades).
+
+### Changed
+
+- Base: OpenWrt 25.12.6 (25.12.5 in rc.1, which did not boot: the old SD
+  driver failed CMD48; the upstream `mtk-sd` driver works). Boots through
+  the lzma loader; the upgrade prunes the eMMC overlay of the old firmware.
+- `omi-rc`/`openmiop` from pcie-ep-net
+  [v0.6.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.0)
+  (`omi-rc` as in v0.5.2: it enables memory and bus mastering on the
+  ASM2824 ports, which Linux 6.12 leaves off; without it no blade
+  connects).
+- Network layout: `wan` (1G jack) and `openmiop` (omi0), no LAN bridge.
+- Login `mixtile` (asked to change the factory password at the first
+  login), root without a password (SSH keys only).
+- The BMC gateway is 10-20 % slower than on 23.05 (Linux 6.12 network
+  stack on the MIPS core).
+
 ### Added
 
+- Web UI (MoCI, patched for the box), three pages, every setting in one
+  place:
+  - CLUSTER: the cluster (name, description, role of every slot), the
+    box from the front (BMC, PCIe switch, slots 1-4 with LEDs, state,
+    24 h availability, CONSOLE, LOGS, POWER), health, traffic.
+  - NETWORK: TOPOLOGY (live diagram of the box's networks), INTERFACES
+    (+ WAN fallback address), FIREWALL, DHCP & DNS (+ DNS/DHCP/names for
+    the blades), ROUTES, DEVICES, TAILSCALE, WIREGUARD, OPENVPN,
+    DIAGNOSTICS.
+  - SYSTEM: GENERAL (+ NTP for the blades, reboot), ACCESS (ports, zones,
+    password; changes roll back unless confirmed), FIRMWARE (updates
+    from GitHub with release notes, manual upload in 32 KiB chunks),
+    BACKUP (progress, configuration history), SOFTWARE (apk), STARTUP
+    (enabled at boot), LOGS, SCHEDULED TASKS, SSH KEYS, STORAGE.
+  - Login page with the firmware version and a link to its release;
+    web files versioned, so the browser picks up a new firmware.
+- Console archive on the eMMC: every boot of every blade in its own
+  file, LOGS viewer (read from boot, follow, search, download).
+- Node availability log (`availwatch`) and 24 h bars.
+- Background release check (`mixtile-update watch`, every 12 h) with an
+  update banner.
+- OpenVPN server for remote access (self-signed certificates pinned by
+  fingerprint, one .ovpn per client) and outgoing OpenVPN connections
+  from uploaded .ovpn files; WireGuard; Tailscale.
+- DHCP on omi0 by default (10.20.0.20-99, gateway, DNS and NTP the BMC).
+- `nodectl probe` (TCP check for the forwarded services).
 - Documentation: the BMC's serial console (3-pin UART header TX/RX/GND,
   57600 8N1 per Mixtile, kernel console 115200), with Mixtile's pinout
   PDF; README EN/RU.
@@ -23,6 +73,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   update.
 - Documentation: known v0.3.0 issue, `/home/mixtile` belongs to root
   (`mixtile` cannot create `~/.ssh`).
+- MoCI firmware upload (uhttpd takes at most 64 KiB per /ubus request),
+  network activity graph (units, VLAN double count), STARTUP (enabled
+  state from procd's rc), SOFTWARE (apk on 25.12).
+
+## [0.4.0-rc.1] - 2026-10-14
+
+The firmware moves from OpenWrt 23.05.2 (Linux 5.15.150) to OpenWrt
+25.12.5 (Linux 6.12.94). OpenMIOP unchanged (Stack v0.5.0, `omi-rc` with
+gateway pull and zero-copy).
+
+### Changed
+
+- Base: OpenWrt 25.12.5, Linux 6.12, package manager apk instead of opkg.
+- Fans on the upstream `pwm-gpio` driver (one PWM chip per fan, same
+  sysfs paths for fan-boot and nodectl); the vendor gpio-pwms kernel patch
+  is gone (its tachometer reading was broken and unused).
+- Blade console driver ch343 updated to WCH V2.2.
+- `omi-rc`/`openmiop` from pcie-ep-net
+  [v0.5.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.5.1)
+  (`omi-rc` builds with Linux 6.1+; same at run time as v0.5.0).
+- Firmware version shown by LuCI from `/etc/openwrt_release`
+  (`OpenWrt 25.12.5 ClusterBox vX.Y.Z`).
+- SD image built for this board only (kernel padded to 10 MiB, squashfs
+  after it), with size checks; same layout on the card as before.
+- sudo rule for the `sudo` group in `/etc/sudoers.d/mixtile`.
+
+### Removed
+
+- Wi-Fi stack (the box has no radio; hostapd and wpa_supplicant ran for
+  nothing), PPP/PPPoE, OpenVPN and its firewall zone, DDNS, lrzsz, pv,
+  memtool, f2fs tools, the initramfs image, Mixtile's vendor `miop.ko`
+  (replaced by `omi-rc`) and the LuCI 23.05 overrides (login page, flash
+  and password pages).
+
+### Fixed
+
+- Files in the squashfs belong to root again (the 23.05 image carried the
+  build user's uid 1001/gid 121 in `/rom`).
 
 ## [0.3.0] - 2026-10-14
 

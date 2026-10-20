@@ -1,0 +1,113 @@
+#!/bin/sh
+# ClusterBox settings: first boot of an image (also after an upgrade that
+# kept the settings).
+
+. /lib/functions.sh
+
+# Port forwards from wan to the blades (10.20.0.x) follow the WAN address:
+# a fixed src_dip broke them every time the BMC got another address, none
+# at all made the 6443 DNAT catch traffic that is only routed through.
+mark_redirect() {
+	local src dip auto
+	config_get src "$1" src
+	config_get dip "$1" dest_ip
+	config_get auto "$1" src_dip_auto
+	[ "$src" = wan ] && [ -z "$auto" ] || return 0
+	case "$dip" in 10.20.0.*) uci -q set "firewall.$1.src_dip_auto=1" ;; esac
+}
+config_load firewall
+config_foreach mark_redirect redirect
+uci -q commit firewall
+
+# On the first run the management settings come from the running
+# services, so an upgrade keeps the ports in use (e.g. LuCI on 8080).
+if [ -z "$(uci -q get clusterbox.admin.seeded)" ]; then
+	p=$(uci -q get uhttpd.main.listen_http | tr ' ' '\n' | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -n 1)
+	[ -n "$p" ] && uci -q set clusterbox.admin.http_port="$p"
+	p=$(uci -q get uhttpd.main.listen_https | tr ' ' '\n' | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -n 1)
+	uci -q set clusterbox.admin.https_port="${p:-0}"
+	p=$(uci -q get uhttpd.main.redirect_https)
+	[ -n "$p" ] && uci -q set clusterbox.admin.redirect_https="$p"
+	s=$(uci -q show dropbear | sed -n 's/^dropbear\.\([^.=]*\)=dropbear$/\1/p' | head -n 1)
+	if [ -n "$s" ]; then
+		p=$(uci -q get "dropbear.$s.Port")
+		[ -n "$p" ] && uci -q set clusterbox.admin.ssh_port="$p"
+		[ "$(uci -q get "dropbear.$s.PasswordAuth")" = off ] && uci -q set clusterbox.admin.ssh_password=0
+	fi
+	s=$(uci -q show ttyd | sed -n 's/^ttyd\.\([^.=]*\)=ttyd$/\1/p' | grep -vx nodectl | head -n 1)
+	p=$([ -n "$s" ] && uci -q get "ttyd.$s.port")
+	[ -n "$p" ] && uci -q set clusterbox.admin.terminal_port="$p"
+	p=$(uci -q get ttyd.nodectl.port)
+	[ -n "$p" ] && uci -q set clusterbox.admin.console_port="$p"
+	uci -q set clusterbox.admin.seeded=1
+	uci -q commit clusterbox
+fi
+
+# Tailscale: interface tailscale0 in its own zone, routed to the blades
+# (subnet router for 10.20.0.0/24) and allowed to reach the management.
+if [ -x /usr/sbin/tailscaled ] && ! uci -q get network.tailscale >/dev/null; then
+	uci -q batch <<-EOF
+		set network.tailscale=interface
+		set network.tailscale.proto=none
+		set network.tailscale.device=tailscale0
+		commit network
+	EOF
+	has_zone=
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+		[ "$(uci -q get "firewall.$s.name")" = tailscale ] && has_zone=1
+	done
+	if [ -z "$has_zone" ]; then
+		omi_zone=openmiop
+		uci -q show firewall | grep -q "\.name='openmiop'$" || omi_zone=lan
+		uci -q batch >/dev/null <<-EOF
+			add firewall zone
+			set firewall.@zone[-1].name=tailscale
+			add_list firewall.@zone[-1].network=tailscale
+			set firewall.@zone[-1].input=ACCEPT
+			set firewall.@zone[-1].output=ACCEPT
+			set firewall.@zone[-1].forward=ACCEPT
+			add firewall forwarding
+			set firewall.@forwarding[-1].src=tailscale
+			set firewall.@forwarding[-1].dest=$omi_zone
+			commit firewall
+		EOF
+	fi
+	uci -q get clusterbox.admin.zones | grep -qw tailscale || {
+		uci -q add_list clusterbox.admin.zones=tailscale
+		uci -q commit clusterbox
+	}
+fi
+
+# The images ship the mixtile user without its home directory: SSH key
+# login (~/.ssh/authorized_keys) needs it, owned by the user.
+if grep -q '^mixtile:' /etc/passwd; then
+	mkdir -p /home/mixtile
+	chown mixtile:mixtile /home/mixtile
+	chmod 755 /home/mixtile
+fi
+
+# root has no password (SSH with a key only, sudo from mixtile): lock the
+# factory password (root/root) of the images; a password set by the user
+# is kept. "*" never matches a password but, unlike "!", does not lock
+# the account for dropbear key login.
+SHADOW=${CB_SHADOW:-/etc/shadow}
+if grep -q '^root:\$1\$asgYXbPb\$GqMnN2vjVOuEBEVPAXLhR\.:' "$SHADOW"; then
+	sed -i 's/^root:[^:]*:/root:*:/' "$SHADOW"
+fi
+
+# MoCI's WireGuard page: the firmware has had WireGuard since 25.12;
+# configs from before kept the page switched off.
+if [ -x /usr/bin/wg ] && [ "$(uci -q get moci.features.wireguard)" = 0 ]; then
+	uci set moci.features.wireguard=1
+	uci commit moci
+fi
+
+# Daily configuration snapshot.
+CRON=${CB_CRON:-/etc/crontabs/root}
+mkdir -p "${CRON%/*}"
+grep -q 'clusterbox/confhist' "$CRON" 2>/dev/null ||
+	echo '17 3 * * * [ "$(uci -q get clusterbox.history.daily)" = 0 ] || /usr/libexec/clusterbox/confhist snapshot daily >/dev/null' >> "$CRON"
+[ -n "$CB_NORELOAD" ] && exit 0
+/etc/init.d/cron enable 2>/dev/null
+/etc/init.d/clusterbox enable
+exit 0

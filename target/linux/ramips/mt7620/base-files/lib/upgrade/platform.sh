@@ -12,6 +12,15 @@ platform_check_image() {
 	return 0
 }
 
+platform_pre_upgrade() {
+	case "$(board_name)" in
+	cluster-box-control|\
+	cluster-box-control-V120)
+		cluster_box_prune_overlay
+		;;
+	esac
+}
+
 platform_do_upgrade() {
 	local board=$(board_name)
 

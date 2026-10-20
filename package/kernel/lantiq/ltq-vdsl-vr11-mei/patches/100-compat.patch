@@ -8,3 +8,14 @@
  MODULE_LICENSE ("GPL");
  #endif /* #ifdef MODULE*/
  
+--- a/src/drv_mei_cpe_linux.h
++++ b/src/drv_mei_cpe_linux.h
+@@ -110,6 +110,8 @@ typedef irqreturn_t (*usedIsrHandler_t)(
+ #  endif
+ #endif
+ 
++#define PDE_DATA pde_data
++
+ /**
+    Function typedef for the Linux request_threaded_irq()
+ */

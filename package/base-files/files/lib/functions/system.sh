@@ -61,11 +61,21 @@ find_mtd_chardev() {
 	echo "${INDEX:+$PREFIX$INDEX}"
 }
 
+get_mac_ascii() {
+	local part="$1"
+	local key="$2"
+	local mac_dirty
+
+	mac_dirty=$(strings "$part" | tr -d ' \t' | sed -n 's/^'"$key"'=//p' | head -n 1)
+
+	# "canonicalize" mac
+	[ -n "$mac_dirty" ] && macaddr_canonicalize "$mac_dirty"
+}
+
 mtd_get_mac_ascii() {
 	local mtdname="$1"
 	local key="$2"
 	local part
-	local mac_dirty
 
 	part=$(find_mtd_part "$mtdname")
 	if [ -z "$part" ]; then
@@ -73,10 +83,7 @@ mtd_get_mac_ascii() {
 		return
 	fi
 
-	mac_dirty=$(strings "$part" | sed -n 's/^'"$key"'=//p')
-
-	# "canonicalize" mac
-	[ -n "$mac_dirty" ] && macaddr_canonicalize "$mac_dirty"
+	get_mac_ascii "$part" "$key"
 }
 
 mtd_get_mac_encrypted_arcadyan() {
@@ -129,6 +136,25 @@ mtd_get_mac_encrypted_deco() {
 	echo $macaddr
 }
 
+get_mac_uci_config() {
+	local file="$1"
+
+	sed -n 's/^\s*option macaddr\s*'"'"'\?\([0-9A-F:]\+\)'"'"'\?/\1/Ip' "$file" | head -n1
+}
+
+mtd_get_mac_uci_config() {
+	local mtdname="$1"
+	local part
+
+	part=$(find_mtd_part "$mtdname")
+	if [ -z "$part" ]; then
+		echo "mtd_get_mac_uci_config: partition $mtdname not found!" >&2
+		return
+	fi
+
+	get_mac_uci_config "$part"
+}
+
 mtd_get_mac_uci_config_ubi() {
 	local volumename="$1"
 
@@ -137,7 +163,7 @@ mtd_get_mac_uci_config_ubi() {
 	local ubidev=$(nand_attach_ubi $CI_UBIPART)
 	local part=$(nand_find_volume $ubidev $volumename)
 
-	cat "/dev/$part" | sed -n 's/^\s*option macaddr\s*'"'"'\?\([0-9A-F:]\+\)'"'"'\?/\1/Ip'
+	get_mac_uci_config "/dev/$part"
 }
 
 mtd_get_mac_text() {
@@ -188,6 +214,20 @@ mtd_get_part_size() {
 			break
 		fi
 	done < /proc/mtd
+}
+
+mmc_get_mac_ascii() {
+	local part_name="$1"
+	local key="$2"
+	local part
+
+	part=$(find_mmc_part "$part_name")
+	if [ -z "$part" ]; then
+		echo "mmc_get_mac_ascii: partition $part_name not found!" >&2
+		return
+	fi
+
+	get_mac_ascii "$part" "$key"
 }
 
 mmc_get_mac_binary() {
@@ -258,12 +298,6 @@ macaddr_random() {
 	echo "$(macaddr_unsetbit_mc "$(macaddr_setbit_la "${randsrc}")")"
 }
 
-macaddr_2bin() {
-	local mac=$1
-
-	echo -ne \\x${mac//:/\\x}
-}
-
 macaddr_canonicalize() {
 	local mac="$1"
 	local canon=""
@@ -299,4 +333,11 @@ macaddr_canonicalize() {
 
 dt_is_enabled() {
 	grep -q okay "/proc/device-tree/$1/status"
+}
+
+get_linux_version() {
+	local ver=$(uname -r)
+	local minor=${ver%\.*}
+
+	printf "%d%02d%03d" ${ver%%\.*} ${minor#*\.} ${ver##*\.} 2>/dev/null
 }

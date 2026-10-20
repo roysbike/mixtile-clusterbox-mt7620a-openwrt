@@ -1,28 +1,57 @@
-# Mixtile ClusterBox BMC firmware (OpenWrt, MT7620A)
+# Mixtile Cluster Box BMC firmware (OpenWrt, MT7620A)
 
 [English](README.md) · [Русский](README.ru.md)
 
-Firmware for the management controller (BMC) of the **Mixtile Cluster Box**:
-OpenWrt 23.05 (kernel 5.15.150) on the MediaTek MT7620A, with node control
-for the four Blade 3 slots (`nodectl` + LuCI), the BMC side of **OpenMIOP**
-(blade-to-blade Ethernet over the internal PCIe fabric: the `omi-rc` kernel
-module, with the `openmiop-rc` helper as fallback), a firmware identity file
-and a GitHub-Releases update mechanism.
+The **Mixtile Cluster Box** holds four **Mixtile Blade 3** compute boards.
+Its control board, the **BMC** (baseboard management controller, a
+MediaTek MT7620A), is the box's own small computer: it is on whenever the
+box has power, whatever the blades do. This repository is an open
+OpenWrt firmware for that BMC. It replaces Mixtile's firmware and turns
+the BMC into the one place from which the whole box is run:
 
-Current release: **v0.3.0** (OpenMIOP Stack v0.5.0: gateway pull with
-zero-copy, ~3x faster LAN -> blades than v0.1; flow offloading on by
-default) — see the [release notes](release-notes/v0.3.0.md),
-[CHANGELOG.md](CHANGELOG.md) and the
-[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0).
+* **Power and consoles of the blades.** Switch each blade on and off,
+  reset it, open its serial console in the browser, and read every boot
+  of every blade later: the consoles are recorded to the BMC's storage.
+* **The PCIe fabric.** The BMC is the PCIe root complex of the box. Its
+  `omi-rc` module brings up **OpenMIOP**, Ethernet between the blades
+  over the internal PCIe switch (`omi0`, 7-8 Gbit/s per flow between
+  blades; that traffic stays in the switch and never touches the BMC).
+* **The cluster's network edge.** The blades reach the LAN and the
+  Internet through the BMC (NAT, DNS and NTP for the blades), and
+  services of the cluster (Kubernetes API, ingress) are forwarded from
+  the BMC's WAN address.
+* **Remote access** to the box and the cluster: Tailscale, WireGuard and
+  OpenVPN, SSH, and a web UI with a guard that rolls back access changes
+  that would lock you out.
+* **Watching the box**: which blades are up and for how long (24 h
+  history), the fabric, the uplink, the forwarded services, the fan and
+  power supply.
+* **Its own updates**: the BMC checks GitHub Releases for new firmware,
+  shows what changed and installs it from the web UI; the blades keep
+  running meanwhile.
+
+![ClusterBox web UI: the cluster page with the box from the front](docs/images/web-ui-cluster.jpg)
+
+*The start page of the web UI (v0.4.0): the cluster at the top, the
+box from the front below it (the BMC, the PCIe switch, slots 1-4 from top to
+bottom with their state, 24 h availability and CONSOLE, LOGS and POWER),
+health and traffic beside it.*
+
+Current release: **v0.4.0** (OpenWrt 25.12.6, Linux 6.12; OpenMIOP Stack
+v0.6.0) — [release notes](release-notes/v0.4.0.md),
+[CHANGELOG.md](CHANGELOG.md),
+[release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0).
+The previous release v0.3.0 is on OpenWrt 23.05.
 
 ## Hardware and who this is for
 
 The **Mixtile Cluster Box** is a small chassis for four **Mixtile Blade 3**
 boards. Inside it:
 
-* a management controller (BMC): MediaTek MT7620A (MIPS) with OpenWrt. It
-  switches the blades on and off, resets them, gives access to their
-  serial consoles and is the PCIe root complex of the box;
+* the BMC: MediaTek MT7620A (MIPS 24KEc, 580 MHz, 256 MB RAM) with an
+  on-board eMMC, a 1 Gbit/s WAN port, the fans and the USB serial
+  adapters of the four blade consoles. It switches the blades on and
+  off, resets them and is the PCIe root complex of the box;
 * an ASMedia ASM2824 PCIe Gen3 switch: a Gen3 x2 link to each blade slot
   and a Gen1 x1 uplink to the BMC.
 
@@ -39,59 +68,167 @@ single Blade 3) and want:
 
 | You want | Repository |
 | --- | --- |
-| Ethernet between the blades over the PCIe switch (`omi0`, ~5 Gbit/s per flow, ~25 Gbit/s with four senders) | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) |
+| Ethernet between the blades over the PCIe switch (`omi0`, 7-8 Gbit/s per flow, ~25 Gbit/s with four senders) | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) |
 | Talos Linux (Kubernetes) on Blade 3, in a Cluster Box or on its own | [mixtile-talos](https://github.com/roysbike/mixtile-talos) |
-| Current OpenWrt on the BMC: blade power and consoles, firmware updates, the BMC side of OpenMIOP | [mixtile-clusterbox-mt7620a-openwrt](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt) (this repository) |
+| Current OpenWrt on the BMC: blade power and consoles, the PCIe fabric, the cluster's network edge, remote access, firmware updates | [mixtile-clusterbox-mt7620a-openwrt](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt) (this repository) |
 
-## OpenMIOP stack
+## Where the BMC sits
 
 ```
-ClusterBox BMC/OpenWrt  (this firmware: omi-rc, omi0 10.20.0.1)
-        |
-     ASM2824 PCIe switch  (uplink Gen1 x1: control + slow gateway)
-        |
-   PCIe fabric  (Gen3 x2 per blade; blade-to-blade traffic stays in the switch)
-  /   /   \   \
-B1  B2   B3   B4
-     Blade 3 (RK3588)
- Talos/openmiop or Debian/openmiop, omi0 10.20.0.x
+        LAN / Internet
+              |
+   WAN 1 Gbit/s (DHCP)          remote access: Tailscale, WireGuard, OpenVPN
+              |
+  +--------------------------------------------------+
+  |  BMC  MT7620A, OpenWrt (this firmware)           |
+  |   web UI, SSH, nodectl (power, consoles, logs)   |
+  |   NAT, DNS, NTP for the blades, port forwards    |
+  |   omi-rc: omi0 10.20.0.1/24, the blades' gateway |
+  +--------------------------------------------------+
+        | PCIe Gen1 x1 (control + gateway)
+   ASM2824 PCIe switch   (blade-to-blade traffic stays here)
+     |         |         |         |      Gen3 x2 each
+  slot 1    slot 2    slot 3    slot 4    Blade 3 (RK3588), omi0 10.20.0.x
 ```
 
-| OpenMIOP Stack v0.5.0 | |
+| OpenMIOP Stack v0.6.0 | |
 | --- | --- |
-| Protocol | OpenMIOP v4 between blades, push mode, gateway pull and zero-copy to the BMC |
-| Blade driver, BMC module | [pcie-ep-net v0.5.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.5.0) |
-| Blade OS | [mixtile-talos v0.5.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.5.0) |
-| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.3.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.3.0) (this repository) |
+| Protocol | OpenMIOP v4 between blades (per-connection doorbell, multiqueue, checksum offload), push mode, gateway pull and zero-copy to the BMC |
+| Blade driver, BMC module | [pcie-ep-net v0.6.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.0) (`omi-rc` as in v0.5.2) |
+| Blade OS | [mixtile-talos v0.6.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.0) |
+| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.4.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0) (this repository) |
 
 The blades run the endpoint driver (`openmiop-ep.ko`, ARM64; not part of this
 firmware). The BMC runs the `omi-rc` kernel module (push mode: the blades
 write their state into BMC memory, the BMC never reads a blade), or the older
-userspace helper `openmiop-rc` as a fallback. Both find the
-endpoints (`1d87:4f4d`) behind the ASM2824, restores their BAR, command and
-MPS settings, numbers them by switch slot, publishes the peer table into
-every endpoint BAR, re-enumerates from the PCIe root port `00:00.0` when a
-blade appears without a BAR address (bridge windows are sized at first
-assignment), and puts the BMC itself on `omi0` (10.20.0.1/24) through a slow
-gateway. The `openmiop` init loads the module and starts the helper only
-if the module does not load, or when `/etc/openmiop.use-helper` exists
-(blades older than pcie-ep-net v0.3).
+userspace helper `openmiop-rc` as a fallback. Both find the endpoints
+(`1d87:4f4d`) behind the ASM2824, restore their BAR, command and MPS
+settings, number them by switch slot, publish the peer table into every
+endpoint BAR, re-enumerate from the PCIe root port `00:00.0` when a blade
+appears without a BAR address, and put the BMC itself on `omi0`
+(10.20.0.1/24) as the blades' gateway. The `openmiop` init loads the module
+and starts the helper only if the module does not load, or when
+`/etc/openmiop.use-helper` exists (blades older than pcie-ep-net v0.3).
 
 ## What is in the firmware
 
 | Package | Content |
 | --- | --- |
-| `kmod-omi-rc` | `omi-rc.ko`, the BMC side of OpenMIOP in push mode (log: `dmesg | grep omi0`), from pcie-ep-net tag v0.3.1 |
-| `openmiop` | `/etc/init.d/openmiop` (enabled; loads `omi-rc`, falls back to the helper), `/usr/bin/openmiop-rc` (log `/tmp/openmiop-rc.log`), `/usr/bin/omi-peek`, from pcie-ep-net tag v0.3.1 with the OpenWrt toolchain |
-| `mixtile-release` | `/etc/mixtile-release`: firmware version (git tag), commit, build date, repository, OpenWrt and kernel version, board, target, OpenMIOP protocol, update channel — generated by the build, nothing typed in by hand |
-| `mixtile-update` | `/usr/libexec/mixtile-update` (also `/usr/sbin/mixtile-update`): update check/download/verify/install from GitHub Releases; `/etc/config/mixtile-update` |
-| `luci-app-mixtile-update` | LuCI **System → Firmware Update**, and the firmware block on **Status → Overview** |
-| `nodectl`, `luci-app-nodectl` | Blade power/reset/console/flash/PXE control, LuCI **Cluster** menu |
-| `custom-files` | Board files from Mixtile, including the vendor `miop.ko` (Mixtile's own MIOP driver for `4586:b6f2` endpoints; prebuilt binary from upstream, not used by OpenMIOP) |
+| `kmod-omi-rc`, `openmiop` | the BMC side of OpenMIOP: `omi-rc.ko` (log: `dmesg | grep omi0`), `/etc/init.d/openmiop`, the fallback helper `openmiop-rc` and `omi-peek`, from pcie-ep-net |
+| `nodectl`, `luci-app-nodectl` | blade power, reset, serial consoles (browser terminal), console archive, PXE and flashing; LuCI **Cluster** menu |
+| `clusterbox` | the BMC settings (`/etc/config/clusterbox`): management access with roll-back guard, WAN fallback address, DNS and NTP for the blades, persistent log, configuration history, node availability log, cluster description, firmware status; the rpcd backend of the web UI |
+| `moci`, `moci-app-clusterbox` | the web UI (MoCI, patched for the box) with the ClusterBox pages and sections, see [The web UI](#the-web-ui); LuCI stays at `/cgi-bin/luci` |
+| `mixtile-release` | `/etc/mixtile-release`: firmware version (git tag), commit, build date, repository, OpenWrt and kernel version, board, OpenMIOP protocol, update channel — generated by the build |
+| `mixtile-update`, `luci-app-mixtile-update` | update check, download, verification and install from GitHub Releases, background check (`/etc/config/mixtile-update`) |
+| Tailscale, WireGuard, OpenVPN | remote access (`tailscale`, `kmod-wireguard`/`wireguard-tools`, `openvpn-mbedtls` + `openssl-util` for the server keys), pages in the web UI (NETWORK → TAILSCALE, WIREGUARD and OPENVPN) and in LuCI |
+
+### The web UI
+
+Three pages, each setting in one place (the login page shows the
+firmware version with a link to its release on GitHub):
+
+| Page | Tabs |
+| --- | --- |
+| **CLUSTER** | the start page: the cluster, the box from the front, health, traffic |
+| **NETWORK** | TOPOLOGY · INTERFACES (with the WAN fallback address) · FIREWALL (with the port forwards) · DHCP & DNS (with DNS, DHCP and names for the blades on omi0) · ROUTES · DEVICES · TAILSCALE · WIREGUARD · OPENVPN · DIAGNOSTICS |
+| **SYSTEM** | GENERAL (name, time zone, NTP server for the blades, reboot) · ACCESS (web/SSH ports and zones, password) · FIRMWARE (updates from GitHub and a manual upload) · BACKUP (with progress, and the configuration history) · SOFTWARE (apk: installed, search, install, remove) · STARTUP (enabled at boot, start/stop) · LOGS (with log storage) · SCHEDULED TASKS · SSH KEYS · STORAGE |
+
+DHCP on omi0 is on by default (10.20.0.20-99; the blades, 10.20.0.205
+and the MetalLB pool 210-219 are static) and hands out the BMC as
+gateway, DNS and NTP server. The BMC has no radio, so there is no
+Wi-Fi page.
+
+**CLUSTER**, the start page:
+
+* On top, the cluster: its name and description and the role and note
+  of every slot (**EDIT**, stored in `/etc/config/clusterbox`; the BMC
+  does not see Kubernetes, so the operator writes them), an overall
+  state and the key facts (nodes online, fabric, WAN, Internet,
+  Tailscale).
+* The box from the front, as it is built: the BMC on top (power, WAN and
+  PCIe switch LEDs, fan duty), the ASM2824 switch with its uplink, then
+  slots 1-4 from top to bottom. Every slot shows LEDs for power, PCIe
+  link and the node answering on its check port, the name, role, address
+  and link (Gen3 x2), the state and how long the node has been in it,
+  the last 24 hours as a bar (online, booting, no PCIe link, off, no data
+  while the BMC was down) with the online share, and CONSOLE, LOGS and
+  POWER (shut down, reboot, cut power, power on).
+* Beside it: health (nodes, fabric, Internet, WAN, the forwarded
+  services: answering or not, checked every 30 s with `nodectl probe`,
+  Tailscale, firmware, chassis), the traffic through the BMC over the
+  last 5 minutes (blade-to-blade traffic does not pass the BMC), the
+  forwarded services and the BMC's load, memory, uptime and firmware.
+
+The page asks the BMC once every 5 s (`clusterbox topology`), changes
+only the values that changed and stops while the browser tab is hidden.
+**LOGS** opens the console log of a node: pick a boot, read it from the
+first line, follow new output, search the whole boot, download it.
+
+**Firmware updates in the web UI.** The BMC looks for a new release
+itself (`mixtile-update watch`: 5 min after boot, then every 12 h; only a
+check, nothing is downloaded): a banner then offers it on every page,
+with the release notes, and **UPDATE** downloads, verifies (SHA-256,
+board, signature when keys are set up) and installs it, waits for the BMC
+and reloads the page. **SYSTEM → FIRMWARE** shows the running firmware
+(version, OpenWrt, kernel, commit, partitions) and the last check.
+Settings: `auto_check`, `check_interval` in `/etc/config/mixtile-update`.
+Development builds (`vX.Y.Z-N-g<sha>`) are never offered a release.
+
+After a firmware update the browser loads the new web files by itself:
+`/www/moci/version.txt`, a hash of them written at boot, is read past the
+cache and goes into every URL (uhttpd sends no Cache-Control).
 
 The LuCI login page, the page footer and Status → Overview show
 `Mixtile ClusterBox · Firmware <version> · commit <sha> · OpenMIOP v<n>`, read
 from `/etc/mixtile-release`.
+
+### Network: topology and VPN
+
+**NETWORK → TOPOLOGY** draws the box's network as it is now, every 5 s:
+the Internet and the upstream router, the BMC (WAN address and link,
+traffic, port forwards, firewall zones), and each network behind it with
+what is on it: `omi0` (the PCIe fabric) with the four blades and the
+forwarded service addresses, Tailscale, the OpenVPN server with its
+clients, outgoing OpenVPN connections and WireGuard interfaces.
+
+**NETWORK → OPENVPN**:
+
+* *Server* — remote access to the BMC (web UI, SSH) and to the blades'
+  network 10.20.0.0/24 from a laptop or phone. **SET UP THE SERVER** asks
+  for the address clients connect to, port, protocol and the client
+  subnet; **ADD CLIENT** makes a client and downloads its `.ovpn` (it can
+  be downloaded again later), **DELETE** locks that client out. There is
+  no certificate authority to look after: the server and every client
+  have their own self-signed EC certificate and each side pins the
+  other's SHA-256 fingerprint (`peer-fingerprint`). The keys stay on the
+  BMC in `/etc/openvpn/cb/` and are kept across firmware updates. The
+  BMC's WAN address is usually private: forward the port to it on the
+  upstream router.
+* *Connections to other VPN servers* — upload an `.ovpn` file from
+  another side (an office, a cloud network); the BMC connects out with
+  it. Directives that run programs (`up`, `script-security`, `plugin`, …)
+  are refused. Connections set up in LuCI (**VPN → OpenVPN**) are listed
+  too.
+
+WireGuard has its own tab (**NETWORK → WIREGUARD**, MoCI's page), Tailscale
+is under **NETWORK → TAILSCALE**.
+
+### Console logs and availability
+
+Each blade's serial console (CH343 USB UART on the BMC, 1.5 Mbaud) is
+recorded by `nodectl consoled` to the BMC's eMMC, one file per boot of
+the blade: `/overlay/log/nodectl/nodeN/YYYYmmdd-HHMMSS.log` (long boots
+continue in `.pNNN.log` parts of `console_archive_part_mb`), every line
+prefixed with the BMC time. A new file starts on a power on or reset from
+`nodectl`, on a U-Boot or kernel boot banner, or when the kernel
+timestamps go back (the blade rebooted by itself). The oldest boots are
+deleted above `console_archive_mb` (512) or `console_archive_boots` (100)
+per blade; settings in `/etc/config/nodectl`. The archive lives outside
+the overlay's upper directory, so firmware updates keep it.
+
+`availwatch` (part of `clusterbox`) checks every 20 s whether each blade
+is powered, has its PCIe link and answers on its check port, and logs
+every change to `/overlay/log/clusterbox/availability`.
 
 ## Install
 
@@ -99,13 +236,14 @@ Release assets:
 
 | File | Purpose |
 | --- | --- |
-| `openmiop-<version>-clusterbox-bmc-openwrt-23.05-mipsel-sysupgrade.bin` | the firmware, written by sysupgrade to the BMC's on-board storage (`mmcblk0`) |
+| `openmiop-<version>-clusterbox-bmc-openwrt-<openwrt>-mipsel-sysupgrade.bin` | the firmware (`<openwrt>` = `23.05` up to v0.3.0, `25.12.6` from v0.4.0), written by sysupgrade to the BMC's on-board storage (`mmcblk0`) |
 | `clusterbox-firmware.json` | board, target, version, commit, OpenMIOP protocol, image SHA-256 (read by `mixtile-update`) |
 | `mixtile-update` | update tool, for the first install from older firmware |
 | `SHA256SUMS`, `BUILD-INFO.txt` | checksums and build record |
 
-This target has no separate factory image. Packages (`*.ipk`), the package
-manifest and buildinfo files are CI artifacts only.
+This target has no separate factory image. Packages (`*.ipk` on 23.05,
+`*.apk` on 25.12), the package manifest and buildinfo files are CI
+artifacts only.
 
 ### First install (from older ClusterBox firmware)
 
@@ -271,25 +409,21 @@ MIXTILE_FW_VERSION=$(git describe --tags --always) ./build.sh firmware
 
 Feeds are pinned to commits in `feeds.conf.default`.
 
-## Known limitations (v0.3.0)
+## Known limitations (v0.4.0)
 
-* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~280 Mbit/s
-  LAN -> blade with zero-copy, ~195 with gateway pull only, ~90 without;
-  ~250-270 blade -> LAN); a
-  BMC reboot can force-demote a DRBD 9.3.4 Primary on the blades if a
+* OpenMIOP: the BMC gateway is limited by the MT7620A CPU (~220-245
+  Mbit/s each way on Linux 6.12, 10-20 % below 23.05). A BMC reboot
+  resets every blade link for ~150 s: on Blade 3 also the M.2 NVMe
+  (mixtile-talos recovers it), DRBD 9.3.4 can force-demote a Primary if a
   Secondary holds stale out-of-sync bits
-  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153)): check
-  `out-of-sync:` 0 before rebooting the BMC; a BMC
-  reboot resets every blade link (on Blade 3 also the M.2 NVMe, which
-  mixtile-talos v0.3.0 recovers); with the fallback helper, root-port
-  re-enumeration pauses fabric traffic ~1-2 s and a blade that
-  disappears without the leave handshake can race a BMC read and wedge
-  the fabric (`omi-rc` never reads a blade). Full list:
+  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153), check
+  `out-of-sync:` 0 first), and CloudNativePG's primary isolation check
+  fails a primary over unless it is turned off for the reboot. Full list:
   [pcie-ep-net](https://github.com/roysbike/pcie-ep-net#known-limitations).
+* Packages: kernel modules from the OpenWrt feeds only install when they
+  match the firmware's kernel.
 * Updates: releases not signed; no A/B rootfs (a firmware that does not
   boot needs the factory restore with the reset button, see Recovery).
-* v0.3.0 image: `/home/mixtile` belongs to root, so `mixtile` cannot
-  create `~/.ssh`. Fix once: `chown mixtile:mixtile /home/mixtile`.
 
 ---
 

@@ -5,10 +5,11 @@ PKG_RELEASE=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/libubox.git
-PKG_MIRROR_HASH:=f22de22a784a0135cc2869fe81ff30e52136dca36863ee713503b4be5be01869
-PKG_SOURCE_DATE:=2023-05-23
-PKG_SOURCE_VERSION:=75a3b870cace1171faf57bd55e5a9a2f1564f757
-PKG_ABI_VERSION:=$(call abi_version_str,$(PKG_SOURCE_DATE))
+PKG_MIRROR_HASH:=82f1a83069c0636722fc1c57d567a21f8b14d14904c8bf10059d2a467edd2a10
+PKG_SOURCE_DATE:=2026-06-19
+PKG_SOURCE_VERSION:=7dd127841e82eb1cfb61185da37dde7b9bd9ba6d
+# PKG_ABI_VERSION:=$(call abi_version_str,$(PKG_SOURCE_DATE))
+PKG_ABI_VERSION:=20260213
 CMAKE_INSTALL:=1
 
 PKG_LICENSE:=ISC
@@ -104,6 +105,14 @@ CMAKE_HOST_OPTIONS += \
 	-DCMAKE_SKIP_RPATH=FALSE \
 	-DCMAKE_MACOSX_RPATH=1 \
 	-DCMAKE_INSTALL_RPATH="${STAGING_DIR_HOST}/lib" \
+
+ifeq ($(HOST_OS),Darwin)
+  define Host/Install
+	$(Host/Install/Default)
+	$(INSTALL_DIR) $(STAGING_DIR_HOSTPKG)/lib
+	cd "$(STAGING_DIR_HOSTPKG)/lib" && ln -sf ../../host/lib/libubox.* .
+  endef
+endif
 
 $(eval $(call BuildPackage,libubox))
 $(eval $(call BuildPackage,libblobmsg-json))

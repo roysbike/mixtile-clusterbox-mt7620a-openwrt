@@ -372,7 +372,7 @@ return view.extend({
 						}, !n.ipaddr || !n.reachable, _('SSH to the node (needs an IP and a running sshd)')),
 						self.btn(_('Jobs'), '', function() {
 							return self.showLog(n.id);
-						}, false, _('Last power / flash job log'))
+						}, false, _('Last power job log'))
 					])
 				])
 			]);
@@ -509,7 +509,7 @@ return view.extend({
 						E('li', {}, [ E('strong', {}, _('SSH')), ' — ',
 							_('Shell on the node when an IP and sshd are available (not used on Talos).') ]),
 						E('li', {}, [ E('strong', {}, _('Jobs')), ' — ',
-							_('Last shutdown, reboot or flash job on the ClusterBox.') ])
+							_('Last shutdown or reboot job on the ClusterBox.') ])
 					])
 				])
 			])

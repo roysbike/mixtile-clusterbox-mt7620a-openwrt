@@ -1,0 +1,3 @@
+/etc/clusterbox/
+# OpenVPN server and client keys, uploaded client configs (web UI).
+/etc/openvpn/cb/

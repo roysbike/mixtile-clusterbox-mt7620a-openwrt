@@ -1,0 +1,44 @@
+#!/bin/sh /etc/rc.common
+# ClusterBox BMC settings (/etc/config/clusterbox): apply them to the
+# service configs, keep the WAN fallback watcher running and record the
+# configuration history, log the availability of the nodes.
+
+START=95
+USE_PROCD=1
+
+HIST=/usr/libexec/clusterbox/confhist
+
+start_service() {
+	mkdir -p /var/run/clusterbox
+	/usr/libexec/clusterbox/apply all
+
+	procd_open_instance wanwatch
+	procd_set_param command /usr/libexec/clusterbox/wanwatch
+	procd_set_param respawn
+	procd_close_instance
+
+	procd_open_instance availwatch
+	procd_set_param command /usr/libexec/clusterbox/availwatch
+	procd_set_param respawn
+	procd_close_instance
+
+	# Synchronous: procd ends the background children of start_service.
+	"$HIST" snapshot boot >/dev/null 2>&1
+}
+
+reload_service() {
+	/usr/libexec/clusterbox/apply all
+}
+
+service_triggers() {
+	local f
+
+	procd_add_reload_trigger clusterbox
+	# A snapshot after every change saved through ubus (LuCI, uci over
+	# rpcd); confhist waits a few seconds so one Save & Apply is one
+	# snapshot.
+	for f in /etc/config/*; do
+		[ -f "$f" ] || continue
+		procd_add_config_trigger "config.change" "${f##*/}" "$HIST" auto "saved: ${f##*/}"
+	done
+}

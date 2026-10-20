@@ -1,0 +1,18 @@
+Firmware upload in 32 KiB chunks: uhttpd takes at most 64 KiB of
+JSON-RPC body on /ubus (longer ones are cut, "Parse error"), and a
+64 KiB chunk is ~87 KiB in base64, so the upload failed on the first
+chunk ("Upload or validation failed").
+ 
+--- a/moci/js/modules/system.js
++++ b/moci/js/modules/system.js
+@@ -727,7 +727,9 @@
+ 
+ 	async uploadFirmwareChunked() {
+ 		if (!this.firmwareFile) throw new Error('No file selected');
+-		const CHUNK_SIZE = 65536;
++		// uhttpd cuts /ubus requests over 64 KiB; 32 KiB is ~44 KiB in
++		// base64.
++		const CHUNK_SIZE = 32768;
+ 		const reader = new FileReader();
+ 
+ 		const readChunk = blob =>

@@ -1,0 +1,92 @@
+{
+	"clusterbox": {
+		"description": "ClusterBox BMC management: topology, access, services, configuration history",
+		"read": {
+			"ubus": {
+				"clusterbox": [
+					"topology",
+					"admin_get",
+					"pending",
+					"password_state",
+					"history_list",
+					"history_files",
+					"history_file",
+					"tailscale_status",
+					"availability",
+					"console_boots",
+					"console_read",
+					"console_grep",
+					"fw_status",
+						"info_get",
+						"ovpn_list",
+						"ovpn_log",
+						"ovpn_client_get",
+						"pkg_list",
+						"pkg_search",
+						"pkg_status"
+				],
+				"nodectl": [
+					"status",
+					"log",
+					"console_log",
+					"leases",
+					"pubkey"
+				],
+				"file": [
+					"read"
+				]
+			},
+			"uci": [
+				"clusterbox",
+				"nodectl"
+			],
+			"file": {
+				"/overlay/config-history/*": [
+					"read"
+				],
+				"/etc/config-history/*": [
+					"read"
+				]
+			}
+		},
+		"write": {
+			"ubus": {
+				"clusterbox": [
+					"admin_set",
+					"confirm",
+					"history_snapshot",
+					"history_restore",
+					"history_delete",
+					"apply",
+					"tailscale_up",
+					"tailscale_down",
+					"tailscale_logout",
+					"fw_check",
+					"fw_download",
+					"fw_install",
+						"info_set",
+						"ovpn_server_setup",
+						"ovpn_server_enable",
+						"ovpn_server_remove",
+						"ovpn_client_add",
+						"ovpn_client_del",
+						"ovpn_import",
+						"ovpn_enable",
+						"ovpn_delete",
+						"pkg_job"
+				],
+				"nodectl": [
+					"action",
+					"rescan",
+					"console",
+					"send",
+					"fan"
+				]
+			},
+			"uci": [
+				"clusterbox",
+				"nodectl"
+			]
+		}
+	}
+}

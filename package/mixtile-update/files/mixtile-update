@@ -9,6 +9,8 @@
 #   mixtile-update verify-local IMAGE
 #   mixtile-update install-local --yes IMAGE [--allow-downgrade] [--allow-protocol-change]
 #   mixtile-update post-boot
+#   mixtile-update watch         background check (procd): check_delay s
+#                                after boot, then every check_interval h
 #   mixtile-update prune-list      files an install keeps from the overlay
 #   mixtile-update prune-preview   files an install removes from the overlay
 #
@@ -235,6 +237,11 @@ keep_extra() {
 # This board's sysupgrade writes kernel and rootfs only; the ext4
 # overlay on mmcblk0p3 survives the update as it is. Files the firmware
 # does not ship (packages and tools installed later) are not touched.
+# Whiteouts of uci-defaults scripts go too: the scripts run again after
+# the update, as on other OpenWrt devices (new versions of a script would
+# never run otherwise). The upgrade itself prunes the same way
+# (/lib/upgrade/cluster-box-overlay.sh); this keeps the preview and the
+# order (prune, then sysupgrade) of older firmware.
 # With "preview", only print what would be removed.
 prune_overlay() {
 	local upper=/overlay/upper keep=$WORK/keep.list rm=$WORK/prune.list f
@@ -255,9 +262,6 @@ prune_overlay() {
 		{
 			if ($0 in k) next
 			for (i = 1; i <= np; i++) if (index($0, p[i]) == 1) next
-			# Whiteouts of uci-defaults scripts that already ran: removing
-			# them would run those scripts again on the next boot.
-			if (index($0, "/etc/uci-defaults/") == 1) next
 			print
 		}' |
 	while read -r f; do
@@ -568,8 +572,22 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+# Background check for the web UI: only "check" (no download, nothing
+# installed). Failures (no network) are retried at the next interval.
+cmd_watch() {
+	local delay hours
+	delay=$(cfg check_delay); case "$delay" in ''|*[!0-9]*) delay=300 ;; esac
+	hours=$(cfg check_interval); case "$hours" in ''|*[!0-9]*|0) hours=12 ;; esac
+	sleep "$delay"
+	while :; do
+		[ "$(cfg auto_check)" = 0 ] || "$SELF" check >/dev/null 2>&1
+		sleep $((hours * 3600))
+	done
+}
+
 case "$cmd" in
 status) cmd_status ;;
+watch) cmd_watch ;;
 check) cmd_check ;;
 download) cmd_download ;;
 verify) cmd_verify ;;
@@ -580,7 +598,7 @@ post-boot) cmd_post_boot ;;
 prune-list) prune_list ;;
 prune-preview) prune_overlay preview ;;
 *)
-	echo "usage: mixtile-update status|check [--channel rc|stable]|download [--background]|verify|install --yes [--background] [--allow-downgrade] [--allow-protocol-change]|verify-local IMAGE|install-local --yes IMAGE|post-boot|prune-list|prune-preview" >&2
+	echo "usage: mixtile-update status|check [--channel rc|stable]|download [--background]|verify|install --yes [--background] [--allow-downgrade] [--allow-protocol-change]|verify-local IMAGE|install-local --yes IMAGE|post-boot|watch|prune-list|prune-preview" >&2
 	exit 2
 	;;
 esac

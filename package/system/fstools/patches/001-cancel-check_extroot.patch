@@ -1,18 +1,18 @@
-Index: fstools-2023-02-28-bfe882d5/block.c
-===================================================================
---- fstools-2023-02-28-bfe882d5.orig/block.c
-+++ fstools-2023-02-28-bfe882d5/block.c
-@@ -1603,11 +1603,11 @@ static int mount_extroot(char *cfg)
+--- a/block.c
++++ b/block.c
+@@ -1616,11 +1616,11 @@
  		if (err) {
  			ULOG_ERR("extroot: mounting %s (%s) on %s failed: %d (%m)\n",
  			         pr->dev, pr->type, path, errno);
 -		} else if (m->overlay) {
-+		} /*else if (m->overlay) {
- 			err = check_extroot(path);
- 			if (err)
- 				umount(path);
--		}
-+		}*/
+-			err = check_extroot(path);
+-			if (err)
+-				umount(path);
+ 		}
++		/* Cluster Box: the overlay on the SD card belongs to every
++		 * firmware written to the card; do not drop it because the
++		 * rootfs UUID changed with an update (check_extroot()).
++		 */
  	} else {
  		ULOG_ERR("extroot: cannot find device %s%s\n",
  		         (m->uuid ? "with UUID " : (m->label ? "with label " : "")),

@@ -1,0 +1,774 @@
+ClusterBox structure of the MoCI pages (three menu entries: CLUSTER,
+NETWORK, SYSTEM; every setting in one place):
+
+- Login page and header say CLUSTERBOX; under the login form the
+  firmware version links to its GitHub release (/moci/firmware.json,
+  written at boot, readable without a session). Page title ClusterBox.
+- No BMC dashboard and ADD-ONS entries in the menu (the dashboard
+  repeated the cluster page; the only add-on is the ClusterBox UI).
+  Reboot / restart network / restart firewall move to SYSTEM > GENERAL.
+- NETWORK: no WIRELESS (the BMC has no radio), DDNS and QOS (packages
+  not in the firmware); DNS & HOSTS joins DHCP ("DHCP & DNS"); tab order
+  interfaces, firewall, DHCP & DNS, routes, devices, WireGuard,
+  diagnostics; the first tab is the default; add-on tabs may go before a
+  tab.
+- SYSTEM: ADMINISTRATION is ACCESS; no LED tab (no LEDs under OpenWrt's
+  control); SOFTWARE is left to the add-on (apk; the opkg status file
+  does not exist on 25.12); BACKUP shows its progress; STARTUP reads
+  procd's rc object (enabled at boot, running) and can enable/disable.
+- Extension point "tab:section": add-ons put sections into a tab of
+  the network and system pages.
+- ACL: rc list and rc init.
+--- a/moci/index.html
++++ b/moci/index.html
+@@ -3,7 +3,7 @@
+ 	<head>
+ 		<meta charset="UTF-8" />
+ 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-		<title>OpenWrt Control</title>
++		<title>ClusterBox</title>
+ 		<link
+ 			rel="icon"
+ 			type="image/svg+xml"
+@@ -21,7 +21,8 @@
+ 		<div id="app">
+ 			<div id="login-view" class="view hidden">
+ 				<div class="login-card">
+-					<h1>OPENWRT</h1>
++					<h1>CLUSTERBOX</h1>
++					<div class="login-sub">Mixtile Cluster Box · BMC</div>
+ 					<form id="login-form">
+ 						<input type="text" id="username" placeholder="Username" autocomplete="username" value="mixtile" />
+ 						<input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+@@ -33,6 +34,7 @@
+ 						<button type="submit">LOGIN</button>
+ 						<div id="login-error" class="error"></div>
+ 					</form>
++					<div class="login-fw" id="login-fw"></div>
+ 				</div>
+ 			</div>
+ 
+@@ -69,16 +71,14 @@
+ 								fill="currentColor"
+ 							/>
+ 						</svg>
+-						<span>OPENWRT</span>
++						<span>CLUSTERBOX</span>
+ 					</div>
+ 					<button class="menu-toggle" aria-label="Toggle menu" aria-expanded="false">
+ 						<span></span><span></span><span></span>
+ 					</button>
+ 					<nav class="nav">
+-						<a href="#/dashboard">BMC</a>
+ 						<a href="#/network">NETWORK</a>
+ 						<a href="#/system">SYSTEM</a>
+-						<a href="#/addons" data-feature="addons">ADD-ONS</a>
+ 					</nav>
+ 					<button id="logout-btn" class="logout-btn">LOGOUT</button>
+ 				</header>
+@@ -171,12 +171,6 @@
+ 							</div>
+ 						</div>
+ 
+-						<div class="section-title" style="margin-top: 32px">QUICK ACTIONS</div>
+-						<div class="quick-actions">
+-							<button class="action-btn danger" id="reboot-btn">Reboot</button>
+-							<button class="action-btn" id="restart-network-btn">Restart Network</button>
+-							<button class="action-btn" id="restart-firewall-btn">Restart Firewall</button>
+-						</div>
+ 
+ 						<div class="section-title">SYSTEM LOG</div>
+ 						<div class="stat-card">
+@@ -190,14 +184,10 @@
+ 						<h2>NETWORK</h2>
+ 						<div class="tabs">
+ 							<button class="tab-btn active" data-tab="interfaces">INTERFACES</button>
+-							<button class="tab-btn" data-tab="devices">DEVICES</button>
+-							<button class="tab-btn" data-tab="routes">ROUTES</button>
+-							<button class="tab-btn" data-tab="wireless">WIRELESS</button>
+ 							<button class="tab-btn" data-tab="firewall">FIREWALL</button>
+-							<button class="tab-btn" data-tab="dhcp" data-feature="dhcp">DHCP</button>
+-							<button class="tab-btn" data-tab="dns">DNS & HOSTS</button>
+-							<button class="tab-btn" data-tab="ddns">DDNS</button>
+-							<button class="tab-btn" data-tab="qos">QOS</button>
++							<button class="tab-btn" data-tab="dhcp" data-feature="dhcp">DHCP & DNS</button>
++							<button class="tab-btn" data-tab="routes">ROUTES</button>
++							<button class="tab-btn" data-tab="devices">DEVICES</button>
+ 							<button class="tab-btn" data-tab="vpn">WIREGUARD</button>
+ 							<button class="tab-btn" data-tab="diagnostics">DIAGNOSTICS</button>
+ 						</div>
+@@ -297,13 +287,6 @@
+ 										<label class="form-label">PORTS</label>
+ 										<div id="device-ports-combo"></div>
+ 									</div>
+-									<div class="form-group" id="device-wireless-group" style="display: none">
+-										<label class="form-label">WIRELESS MEMBERS (read-only)</label>
+-										<div
+-											id="device-wireless-list"
+-											style="display: flex; flex-wrap: wrap; gap: 6px"
+-										></div>
+-									</div>
+ 									<div class="form-group">
+ 										<label class="form-label">MTU (optional)</label>
+ 										<input type="text" id="edit-device-mtu" class="form-input" placeholder="1500" />
+@@ -552,114 +535,7 @@
+ 							</div>
+ 						</div>
+ 
+-						<div class="modal hidden" id="wireless-modal">
+-							<div class="modal-backdrop"></div>
+-							<div class="modal-content">
+-								<div class="modal-header">
+-									<h3 class="modal-title">CONFIGURE WIRELESS</h3>
+-									<button class="modal-close" id="close-wireless-modal">&times;</button>
+-								</div>
+-								<form class="modal-body" onsubmit="return false;">
+-									<input type="hidden" id="edit-wifi-radio" />
+-									<input type="hidden" id="edit-wifi-section" />
+-
+-									<div class="form-group">
+-										<label class="form-label">ENABLED</label>
+-										<select id="edit-wifi-disabled" class="form-input">
+-											<option value="0">Yes</option>
+-											<option value="1">No (Disabled)</option>
+-										</select>
+-									</div>
+-
+-									<div class="form-group">
+-										<label class="form-label">SSID (NETWORK NAME)</label>
+-										<input
+-											type="text"
+-											id="edit-wifi-ssid"
+-											class="form-input"
+-											placeholder="MyNetwork"
+-											autocomplete="off"
+-										/>
+-									</div>
+-
+-									<div class="form-group">
+-										<label class="form-label">ENCRYPTION</label>
+-										<select id="edit-wifi-encryption" class="form-input">
+-											<option value="none">None (Open)</option>
+-											<option value="psk2">WPA2-PSK</option>
+-											<option value="psk-mixed">WPA/WPA2-PSK Mixed</option>
+-											<option value="sae">WPA3-SAE</option>
+-											<option value="sae-mixed">WPA2/WPA3-SAE Mixed</option>
+-										</select>
+-									</div>
+-
+-									<div class="form-group" id="wifi-key-group">
+-										<label class="form-label">PASSWORD</label>
+-										<input
+-											type="password"
+-											id="edit-wifi-key"
+-											class="form-input"
+-											placeholder="Enter password (8+ characters)"
+-											autocomplete="new-password"
+-										/>
+-									</div>
+-
+-									<div class="form-group">
+-										<label class="form-label">CHANNEL</label>
+-										<select id="edit-wifi-channel" class="form-input">
+-											<option value="auto">Auto</option>
+-										</select>
+-									</div>
+-
+-									<div class="form-group">
+-										<label class="form-label">TRANSMIT POWER</label>
+-										<select id="edit-wifi-txpower" class="form-input">
+-											<option value="">Default</option>
+-											<option value="10">Low (10 dBm)</option>
+-											<option value="15">Medium (15 dBm)</option>
+-											<option value="20">High (20 dBm)</option>
+-											<option value="25">Maximum (25 dBm)</option>
+-										</select>
+-									</div>
+-
+-									<div class="form-group">
+-										<label class="form-label">HIDDEN SSID</label>
+-										<select id="edit-wifi-hidden" class="form-input">
+-											<option value="0">No (Broadcast SSID)</option>
+-											<option value="1">Yes (Hidden)</option>
+-										</select>
+-									</div>
+-								</form>
+-								<div class="modal-footer">
+-									<button class="action-btn" id="cancel-wireless-btn">CANCEL</button>
+-									<button class="action-btn" id="save-wireless-btn">SAVE CHANGES</button>
+-								</div>
+-							</div>
+-						</div>
+ 
+-						<div class="tab-content hidden" id="tab-wireless">
+-							<div class="stat-card">
+-								<table class="data-table" id="wireless-table">
+-									<thead>
+-										<tr>
+-											<th>RADIO</th>
+-											<th>SSID</th>
+-											<th>CHANNEL</th>
+-											<th>STATUS</th>
+-											<th>ENCRYPTION</th>
+-											<th>ACTIONS</th>
+-										</tr>
+-									</thead>
+-									<tbody>
+-										<tr>
+-											<td colspan="6" style="text-align: center; color: var(--steel-muted)">
+-												Loading...
+-											</td>
+-										</tr>
+-									</tbody>
+-								</table>
+-							</div>
+-						</div>
+ 
+ 						<div class="tab-content hidden" id="tab-firewall">
+ 							<div class="stat-card">
+@@ -1255,9 +1131,7 @@
+ 									</tbody>
+ 								</table>
+ 							</div>
+-						</div>
+-
+-						<div class="tab-content hidden" id="tab-dns">
++						
+ 							<div class="stat-card">
+ 								<div class="section-title">DNS SERVER SETTINGS</div>
+ 								<div class="form-group">
+@@ -1348,81 +1222,8 @@
+ 							</div>
+ 						</div>
+ 
+-						<div class="tab-content hidden" id="tab-ddns">
+-							<div class="stat-card">
+-								<div class="section-title">DYNAMIC DNS SERVICES</div>
+-								<button class="action-btn" id="add-ddns-btn" style="margin-bottom: 16px">
+-									ADD SERVICE
+-								</button>
+-								<table class="data-table" id="ddns-table">
+-									<thead>
+-										<tr>
+-											<th>SERVICE</th>
+-											<th>HOSTNAME</th>
+-											<th>PROVIDER</th>
+-											<th>STATUS</th>
+-											<th>ENABLED</th>
+-											<th>ACTIONS</th>
+-										</tr>
+-									</thead>
+-									<tbody>
+-										<tr>
+-											<td colspan="6" style="text-align: center; color: var(--steel-muted)">
+-												Loading...
+-											</td>
+-										</tr>
+-									</tbody>
+-								</table>
+-							</div>
+-						</div>
+ 
+-						<div class="tab-content hidden" id="tab-qos">
+-							<div class="stat-card">
+-								<div class="section-title">QOS CONFIGURATION</div>
+-								<div class="form-group">
+-									<label class="form-label">ENABLE QOS</label>
+-									<select id="qos-enabled" class="form-input">
+-										<option value="0">Disabled</option>
+-										<option value="1">Enabled</option>
+-									</select>
+-								</div>
+-								<div class="form-group">
+-									<label class="form-label">DOWNLOAD SPEED (Kbit/s)</label>
+-									<input type="number" id="qos-download" class="form-input" placeholder="10000" />
+-								</div>
+-								<div class="form-group">
+-									<label class="form-label">UPLOAD SPEED (Kbit/s)</label>
+-									<input type="number" id="qos-upload" class="form-input" placeholder="1000" />
+-								</div>
+-								<button class="action-btn" id="save-qos-config-btn">SAVE CONFIGURATION</button>
+-							</div>
+ 
+-							<div class="stat-card" style="margin-top: 24px">
+-								<div class="section-title">QOS CLASSIFICATION RULES</div>
+-								<button class="action-btn" id="add-qos-rule-btn" style="margin-bottom: 16px">
+-									ADD RULE
+-								</button>
+-								<table class="data-table" id="qos-rules-table">
+-									<thead>
+-										<tr>
+-											<th>NAME</th>
+-											<th>PRIORITY</th>
+-											<th>PROTOCOL</th>
+-											<th>PORT</th>
+-											<th>SOURCE IP</th>
+-											<th>ACTIONS</th>
+-										</tr>
+-									</thead>
+-									<tbody>
+-										<tr>
+-											<td colspan="6" style="text-align: center; color: var(--steel-muted)">
+-												Loading...
+-											</td>
+-										</tr>
+-									</tbody>
+-								</table>
+-							</div>
+-						</div>
+ 
+ 						<div class="modal hidden" id="static-lease-modal">
+ 							<div class="modal-backdrop"></div>
+@@ -2014,16 +1815,15 @@
+ 						<h2>SYSTEM</h2>
+ 						<div class="tabs">
+ 							<button class="tab-btn active" data-tab="general">GENERAL</button>
+-							<button class="tab-btn" data-tab="admin">ADMINISTRATION</button>
+-							<button class="tab-btn" data-tab="logs">LOGS</button>
+-							<button class="tab-btn" data-tab="backup">BACKUP/RESTORE</button>
++							<button class="tab-btn" data-tab="admin">ACCESS</button>
++							<button class="tab-btn" data-tab="upgrade">FIRMWARE</button>
++							<button class="tab-btn" data-tab="backup">BACKUP</button>
+ 							<button class="tab-btn" data-tab="software">SOFTWARE</button>
+ 							<button class="tab-btn" data-tab="startup">STARTUP</button>
++							<button class="tab-btn" data-tab="logs">LOGS</button>
+ 							<button class="tab-btn" data-tab="cron">SCHEDULED TASKS</button>
+ 							<button class="tab-btn" data-tab="ssh-keys">SSH KEYS</button>
+ 							<button class="tab-btn" data-tab="mounts">STORAGE</button>
+-							<button class="tab-btn" data-tab="led">LED</button>
+-							<button class="tab-btn" data-tab="upgrade">FIRMWARE</button>
+ 						</div>
+ 
+ 						<div class="tab-content" id="tab-general">
+@@ -2041,6 +1841,15 @@
+ 									<button class="action-btn" id="save-general-btn">SAVE CHANGES</button>
+ 								</div>
+ 							</div>
++							<div class="stat-card" style="margin-top: 16px">
++								<div class="section-title">BMC</div>
++								<div class="quick-actions">
++									<button class="action-btn danger" id="reboot-btn">REBOOT THE BMC</button>
++									<button class="action-btn" id="restart-network-btn">RESTART NETWORK</button>
++									<button class="action-btn" id="restart-firewall-btn">RESTART FIREWALL</button>
++								</div>
++								<div class="form-hint">A BMC reboot resets every blade link; the blades keep running and reconnect when the BMC is back.</div>
++							</div>
+ 						</div>
+ 
+ 						<div class="tab-content hidden" id="tab-logs">
+@@ -2108,35 +1917,21 @@
+ 
+ 						<div class="tab-content hidden" id="tab-backup">
+ 							<div class="stat-card">
+-								<div class="section-title">BACKUP / RESTORE</div>
++								<div class="section-title">BACKUP</div>
+ 								<div class="quick-actions">
+ 									<button class="action-btn" id="backup-btn">GENERATE BACKUP</button>
+ 									<button class="action-btn danger" id="reset-btn">RESET TO DEFAULTS</button>
+ 								</div>
++								<div class="backup-progress hidden" id="backup-progress">
++									<div class="progress-bar"><div class="progress-fill" id="backup-progress-fill"></div></div>
++									<div class="form-hint" id="backup-progress-text"></div>
++								</div>
++								<div class="form-hint">The backup holds the configuration (/etc/config and the files sysupgrade keeps); restore it with LuCI or sysupgrade -r.</div>
+ 							</div>
+ 						</div>
+ 
+-						<div class="tab-content hidden" id="tab-software">
+-							<div class="stat-card">
+-								<div class="section-title">INSTALLED PACKAGES</div>
+-								<table class="data-table" id="packages-table">
+-									<thead>
+-										<tr>
+-											<th>PACKAGE</th>
+-											<th>VERSION</th>
+-											<th>ACTIONS</th>
+-										</tr>
+-									</thead>
+-									<tbody>
+-										<tr>
+-											<td colspan="3" style="text-align: center; color: var(--steel-muted)">
+-												Loading...
+-											</td>
+-										</tr>
+-									</tbody>
+-								</table>
+-							</div>
+-						</div>
++						<!-- Filled by the ClusterBox add-on (apk). -->
++						<div class="tab-content hidden" id="tab-software"></div>
+ 
+ 						<div class="tab-content hidden" id="tab-startup">
+ 							<div class="stat-card">
+@@ -2251,27 +2046,6 @@
+ 							</div>
+ 						</div>
+ 
+-						<div class="tab-content hidden" id="tab-led">
+-							<div class="stat-card">
+-								<div class="section-title">LED CONFIGURATION</div>
+-								<table class="data-table" id="led-table">
+-									<thead>
+-										<tr>
+-											<th>LED</th>
+-											<th>TRIGGER</th>
+-											<th>ACTIONS</th>
+-										</tr>
+-									</thead>
+-									<tbody>
+-										<tr>
+-											<td colspan="3" style="text-align: center; color: var(--steel-muted)">
+-												Loading...
+-											</td>
+-										</tr>
+-									</tbody>
+-								</table>
+-							</div>
+-						</div>
+ 
+ 						<div class="tab-content hidden" id="tab-upgrade">
+ 							<div class="stat-card">
+--- a/moci/app.css
++++ b/moci/app.css
+@@ -1668,3 +1668,15 @@
+ 	font-size: 13px;
+ 	color: var(--steel-muted);
+ }
++
++/* ClusterBox: login footer, hints, backup progress, add-on sections. */
++.login-sub { margin: -12px 0 24px; text-align: center; font-size: 12px; letter-spacing: 0.1em; color: var(--steel-muted); }
++.login-fw { margin-top: 20px; text-align: center; font-size: 11.5px; color: var(--steel-muted); font-family: var(--font-mono); }
++.login-fw a { color: var(--steel-muted); text-decoration: underline; text-underline-offset: 3px; }
++.login-fw a:hover { color: var(--starship-steel); }
++.form-hint { margin-top: 10px; font-size: 12.5px; color: var(--steel-muted); }
++.backup-progress { margin-top: 16px; }
++.progress-fill.busy { background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); background-size: 200% 100%; animation: moci-busy 1.2s linear infinite; }
++@keyframes moci-busy { from { background-position: 200% 0; } to { background-position: -200% 0; } }
++@media (prefers-reduced-motion: reduce) { .progress-fill.busy { animation: none; } }
++.addon-section + .addon-section, .tab-content > .stat-card + .addon-section, .addon-section + .stat-card { margin-top: 16px; }
+--- a/moci/js/core.js
++++ b/moci/js/core.js
+@@ -106,6 +106,7 @@
+ 	}
+ 
+ 	async init() {
++		this.showFirmwareFooter();
+ 		if (this.sessionId) {
+ 			const valid = await this.validateSession();
+ 			if (valid) {
+@@ -122,6 +123,64 @@
+ 		}
+ 	}
+ 
++	// Firmware version under the login form, with a link to its release
++	// (a development build links to its commit). /moci/firmware.json is
++	// written at boot from /etc/mixtile-release and needs no session.
++	async showFirmwareFooter() {
++		const el = document.getElementById('login-fw');
++		if (!el) return;
++		try {
++			const res = await fetch('/moci/firmware.json', { cache: 'no-store' });
++			if (!res.ok) return;
++			const fw = await res.json();
++			const repo = /^[\w.-]+\/[\w.-]+$/.test(fw.repository || '') ? fw.repository : '';
++			const release = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(fw.version || '');
++			const href = !repo ? '' : release ? `https://github.com/${repo}/releases/tag/${fw.version}`
++				: /^[0-9a-f]{7,40}$/.test(fw.commit || '') ? `https://github.com/${repo}/commit/${fw.commit}` : `https://github.com/${repo}/releases`;
++			const label = `Firmware ${fw.version || '?'}${fw.openwrt ? ` · OpenWrt ${fw.openwrt}` : ''}`;
++			el.innerHTML = href
++				? `<a href="${this.escapeHtml(href)}" target="_blank" rel="noopener">${this.escapeHtml(label)}</a>`
++				: this.escapeHtml(label);
++		} catch {}
++	}
++
++	// Sections that add-ons put into a tab of a MoCI page (extension point
++	// "tab:section": {id, page, tab, position: 'top'|'bottom', render(el)}),
++	// rendered every time the tab is shown.
++	renderSections(page, tab) {
++		for (const ext of this.getExtensions('tab:section')) {
++			if (ext.page !== page || ext.tab !== tab || !/^[a-z0-9-]+$/.test(ext.id || '')) continue;
++			const host = document.getElementById(`tab-${tab}`);
++			if (!host || typeof ext.render !== 'function') continue;
++			let el = document.getElementById(`section-${ext.id}`);
++			if (!el) {
++				el = document.createElement('div');
++				el.id = `section-${ext.id}`;
++				el.className = 'addon-section';
++				if (ext.position === 'top') host.prepend(el);
++				else host.appendChild(el);
++			}
++			try {
++				ext.render(el);
++			} catch (err) {
++				console.error(`Section ${ext.id} failed:`, err);
++			}
++		}
++	}
++
++	// Wrap a page's tab handlers so that add-on sections follow each tab.
++	withSections(page, handlers) {
++		for (const tab of Object.keys(handlers)) {
++			const load = handlers[tab];
++			handlers[tab] = () => {
++				const r = load();
++				this.renderSections(page, tab);
++				return r;
++			};
++		}
++		return handlers;
++	}
++
+ 	async loadFeatures() {
+ 		try {
+ 			const [status, result] = await this.uciGet('moci', 'features');
+--- a/moci/js/modules/network.js
++++ b/moci/js/modules/network.js
+@@ -76,7 +76,11 @@
+ 					routes: () => this.loadRoutes(),
+ 					wireless: () => this.loadWireless(),
+ 					firewall: () => this.loadFirewall(),
+-					dhcp: () => this.loadDHCP(),
++					// DHCP & DNS: one tab on the ClusterBox (the fabric's dnsmasq).
++					dhcp: () => {
++						this.loadDHCP();
++						this.loadDNS();
++					},
+ 					dns: () => this.loadDNS(),
+ 					ddns: () => this.loadDDNS(),
+ 					qos: () => this.loadQoS(),
+@@ -84,13 +88,13 @@
+ 					diagnostics: () => this.loadDiagnostics()
+ 				};
+ 				this.injectTabExtensions(loadHandlers);
+-				this.subTabs = this.core.setupSubTabs('network-page', loadHandlers);
++				this.subTabs = this.core.setupSubTabs('network-page', this.core.withSections('network', loadHandlers));
+ 				this.subTabs.attachListeners();
+ 				this.setupModals();
+ 				this.setupDiagnostics();
+ 			}
+ 
+-			const tab = subPaths[0] || 'interfaces';
++			const tab = subPaths[0] || document.querySelector('#network-page .tabs .tab-btn')?.dataset.tab || 'interfaces';
+ 			this.subTabs.showSubTab(tab);
+ 		});
+ 	}
+@@ -1842,7 +1846,10 @@
+ 			btn.className = 'tab-btn';
+ 			btn.setAttribute('data-tab', ext.id);
+ 			btn.textContent = ext.label;
+-			if (ext.after && safeId.test(ext.after)) {
++			const beforeBtn = ext.before && safeId.test(ext.before) ? tabBar.querySelector(`[data-tab="${ext.before}"]`) : null;
++			if (beforeBtn) {
++				tabBar.insertBefore(btn, beforeBtn);
++			} else if (ext.after && safeId.test(ext.after)) {
+ 				const afterBtn = tabBar.querySelector(`[data-tab="${ext.after}"]`);
+ 				if (afterBtn?.nextSibling) {
+ 					tabBar.insertBefore(btn, afterBtn.nextSibling);
+--- a/moci/js/modules/system.js
++++ b/moci/js/modules/system.js
+@@ -12,19 +12,19 @@
+ 			if (pageElement) pageElement.classList.remove('hidden');
+ 
+ 			if (!this.subTabs) {
+-				this.subTabs = this.core.setupSubTabs('system-page', {
++				this.subTabs = this.core.setupSubTabs('system-page', this.core.withSections('system', {
+ 					general: () => this.loadGeneral(),
+ 					admin: () => this.loadAdmin(),
+ 					logs: () => this.loadLogs(),
+ 					backup: () => this.loadBackup(),
+-					software: () => this.loadPackages(),
++					// SOFTWARE is the ClusterBox add-on's apk page (a tab section).
++					software: () => {},
+ 					startup: () => this.loadStartup(),
+ 					cron: () => this.loadCron(),
+ 					'ssh-keys': () => this.loadSSHKeys(),
+ 					mounts: () => this.loadMounts(),
+-					led: () => this.loadLED(),
+ 					upgrade: () => this.loadUpgrade()
+-				});
++				}));
+ 				this.subTabs.attachListeners();
+ 				this.setupHandlers();
+ 			}
+@@ -85,7 +85,7 @@
+ 		const delegations = {
+ 			'cron-table': { edit: id => this.editCronEntry(id), delete: id => this.deleteCronEntry(id) },
+ 			'ssh-keys-table': { delete: id => this.deleteSSHKey(id) },
+-			'services-table': { toggle: id => this.toggleService(id) }
++			'services-table': { toggle: id => this.toggleService(id), boot: id => this.toggleBoot(id) }
+ 		};
+ 
+ 		for (const [tableId, handlers] of Object.entries(delegations)) {
+@@ -198,22 +198,40 @@
+ 
+ 	async loadBackup() {}
+ 
++	// Backup with a progress line: the archive is made on the BMC, then
++	// read in one piece and saved by the browser.
+ 	async createBackup() {
++		const btn = document.getElementById('backup-btn');
++		const box = document.getElementById('backup-progress');
++		const fill = document.getElementById('backup-progress-fill');
++		const text = document.getElementById('backup-progress-text');
++		const step = (pct, msg, busy) => {
++			box?.classList.remove('hidden');
++			if (fill) {
++				fill.style.width = `${pct}%`;
++				fill.classList.toggle('busy', !!busy);
++			}
++			if (text) text.textContent = msg;
++		};
++		if (btn) btn.disabled = true;
+ 		try {
++			step(15, 'Creating the archive on the BMC (sysupgrade --create-backup)…', true);
+ 			const [s] = await this.core.ubusCall(
+ 				'file',
+ 				'exec',
+ 				{ command: '/sbin/sysupgrade', params: ['--create-backup', '/tmp/backup.tar.gz'] },
+-				{ timeout: 30000 }
++				{ timeout: 60000 }
+ 			);
+ 			if (s !== 0) throw new Error('Backup failed');
+ 
++			step(60, 'Downloading the archive…', true);
+ 			const [rs, rr] = await this.core.ubusCall('file', 'read', {
+ 				path: '/tmp/backup.tar.gz',
+ 				base64: true
+ 			});
+ 			if (rs !== 0 || !rr?.data) throw new Error('Failed to read backup');
+ 
++			step(90, 'Saving…', false);
+ 			const binary = atob(rr.data);
+ 			const bytes = new Uint8Array(binary.length);
+ 			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+@@ -222,13 +240,17 @@
+ 			const url = URL.createObjectURL(blob);
+ 			const a = document.createElement('a');
+ 			a.href = url;
+-			a.download = `backup-${new Date().toISOString().slice(0, 10)}.tar.gz`;
++			const host = (document.getElementById('hostname')?.value || 'clusterbox').replace(/[^A-Za-z0-9-]/g, '');
++			a.download = `backup-${host}-${new Date().toISOString().slice(0, 10)}.tar.gz`;
+ 			a.click();
+ 			URL.revokeObjectURL(url);
++			step(100, `Backup saved: ${a.download} (${Math.ceil(bytes.length / 1024)} KiB)`, false);
+ 			this.core.showToast('Backup created', 'success');
+ 		} catch {
++			step(100, 'Backup failed', false);
+ 			this.core.showToast('Failed to create backup', 'error');
+ 		} finally {
++			if (btn) btn.disabled = false;
+ 			try {
+ 				await this.core.ubusCall('file', 'exec', { command: '/bin/rm', params: ['-f', '/tmp/backup.tar.gz'] });
+ 			} catch {}
+@@ -302,15 +324,18 @@
+ 		});
+ 	}
+ 
++	// Init scripts from procd's rc object: enabled at boot and running.
++	// "Not running" is neutral: one-shot services (firewall, gpio_switch)
++	// load their settings and leave no process behind.
+ 	async loadStartup() {
+ 		await this.core.loadResource('services-table', 4, 'services', async () => {
+-			const [status, result] = await this.core.ubusCall('service', 'list', {});
++			const [status, result] = await this.core.ubusCall('rc', 'list', {});
+ 			if (status !== 0 || !result) throw new Error('No data');
+ 
+-			const services = Object.entries(result).map(([name, info]) => ({
+-				name,
+-				running: info.instances && Object.keys(info.instances).length > 0
+-			}));
++			const services = Object.entries(result)
++				// Scripts without a procd service (one-shot) have no "running".
++				.map(([name, info]) => ({ name, enabled: !!info.enabled, running: info.running, start: info.start }))
++				.sort((a, b) => a.name.localeCompare(b.name));
+ 
+ 			this.core.renderTable(
+ 				'#services-table',
+@@ -319,12 +344,15 @@
+ 				'No services found',
+ 				s => `<tr>
+ 				<td>${this.core.escapeHtml(s.name)}</td>
+-				<td>${s.running ? this.core.renderBadge('success', 'RUNNING') : this.core.renderBadge('error', 'STOPPED')}</td>
+-				<td>${this.core.renderBadge('info', 'N/A')}</td>
++				<td>${s.running === undefined ? '<span style="color:var(--steel-muted)">—</span>' : s.running ? this.core.renderBadge('success', 'RUNNING') : this.core.renderBadge('info', 'NOT RUNNING')}</td>
++				<td>${s.enabled ? this.core.renderBadge('success', 'ENABLED') : this.core.renderBadge('warning', 'DISABLED')}</td>
+ 				<td>
+ 					<div class="action-buttons">
+-						<button class="action-btn" data-action="toggle" data-id="${this.core.escapeHtml(s.name)}" style="font-size:11px;padding:4px 8px">
++						${s.running === undefined ? '' : `<button class="action-btn" data-action="toggle" data-id="${this.core.escapeHtml(s.name)}" style="font-size:11px;padding:4px 8px">
+ 							${s.running ? 'STOP' : 'START'}
++						</button>`}
++						<button class="action-btn" data-action="boot" data-id="${this.core.escapeHtml(s.name)}" style="font-size:11px;padding:4px 8px">
++							${s.enabled ? 'DISABLE' : 'ENABLE'}
+ 						</button>
+ 					</div>
+ 				</td>
+@@ -333,27 +361,31 @@
+ 		});
+ 	}
+ 
+-	async toggleService(name) {
+-		if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
++	async rcAction(name, action, done) {
++		if (!/^[a-zA-Z0-9_.-]+$/.test(name)) {
+ 			this.core.showToast('Invalid service name', 'error');
+ 			return;
+ 		}
+ 		try {
+-			const [status, result] = await this.core.ubusCall('service', 'list', {});
+-			const info = result?.[name];
+-			const running = info?.instances && Object.keys(info.instances).length > 0;
+-			const action = running ? 'stop' : 'start';
+-
+-			await this.core.ubusCall('file', 'exec', {
+-				command: `/etc/init.d/${name}`,
+-				params: [action]
+-			});
+-			const pastTense = action === 'stop' ? 'stopped' : `${action}ed`;
+-			this.core.showToast(`Service ${name} ${pastTense}`, 'success');
+-			this.loadStartup();
++			const [status] = await this.core.ubusCall('rc', 'init', { name, action });
++			if (status !== 0) throw new Error(`status ${status}`);
++			this.core.showToast(`${name}: ${done}`, 'success');
+ 		} catch {
+-			this.core.showToast(`Failed to toggle service ${name}`, 'error');
++			this.core.showToast(`${name}: ${action} failed`, 'error');
+ 		}
++		setTimeout(() => this.loadStartup(), 800);
++	}
++
++	async toggleService(name) {
++		const [, result] = await this.core.ubusCall('rc', 'list', { name }).catch(() => [1, null]);
++		const running = !!result?.[name]?.running;
++		await this.rcAction(name, running ? 'stop' : 'start', running ? 'stopped' : 'started');
++	}
++
++	async toggleBoot(name) {
++		const [, result] = await this.core.ubusCall('rc', 'list', { name }).catch(() => [1, null]);
++		const enabled = !!result?.[name]?.enabled;
++		await this.rcAction(name, enabled ? 'disable' : 'enable', enabled ? 'disabled at boot' : 'enabled at boot');
+ 	}
+ 
+ 	async loadCron() {
+--- a/rpcd-acl.json
++++ b/rpcd-acl.json
+@@ -34,7 +34,8 @@
+ 				"file": ["read"],
+ 				"system": ["info", "board"],
+ 				"moci": ["getDHCPLeases", "getPorts", "getBridges"],
+-				"service": ["list"]
++				"service": ["list"],
++				"rc": ["list"]
+ 			},
+ 			"uci": ["moci"]
+ 		},
+@@ -66,7 +67,8 @@
+ 				"file": ["write", "exec"],
+ 				"system": ["reboot"],
+ 				"network.interface": ["up", "down"],
+-				"moci": ["setPassword", "wgGenKey"]
++				"moci": ["setPassword", "wgGenKey"],
++				"rc": ["init"]
+ 			},
+ 			"uci": [
+ 				"network",

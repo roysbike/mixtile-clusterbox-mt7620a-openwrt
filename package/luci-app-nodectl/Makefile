@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-nodectl
 PKG_VERSION:=1.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -16,7 +16,7 @@ endef
 
 define Package/luci-app-nodectl/description
 	Web UI for nodectl: node status, power control, serial and SSH
-	consoles in the browser and OS image flashing.
+	consoles in the browser.
 endef
 
 define Build/Prepare

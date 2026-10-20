@@ -42,42 +42,36 @@
 		compatible = "gpio-leds";
 
 		lan1 {
-			label = "green:lan1";
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio 3 GPIO_ACTIVE_HIGH>;
 		};
 
 		lan2 {
-			label = "green:lan2";
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio 4 GPIO_ACTIVE_LOW>;
 		};
 
 		lan3 {
-			label = "green:lan3";
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio 14 GPIO_ACTIVE_LOW>;
 		};
 
 		led_power: power {
-			label = "green:power";
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_POWER;
 			gpios = <&gpio 7 GPIO_ACTIVE_LOW>;
 		};
 
 		wan_green {
-			label = "green:wan";
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_WAN;
 			gpios = <&gpio 15 GPIO_ACTIVE_LOW>;
 		};
 
 		led_wan_red: wan_red {
-			label = "red:wan";
 			color = <LED_COLOR_ID_RED>;
 			function = LED_FUNCTION_WAN;
 			gpios = <&gpio 16 GPIO_ACTIVE_LOW>;
@@ -116,17 +110,25 @@
 				read-only;
 			};
 
-			factory: partition@50000 {
+			partition@50000 {
 				label = "factory";
 				reg = <0x50000 0x10000>;
 				read-only;
 
-				compatible = "nvmem-cells";
-				#address-cells = <1>;
-				#size-cells = <1>;
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
 
-				macaddr: macaddr@4 {
-					reg = <0x4 0x6>;
+					eeprom: eeprom@0 {
+						reg = <0x0 0xe00>;
+					};
+
+					macaddr: macaddr@4 {
+						compatible = "mac-base";
+						reg = <0x4 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
 				};
 			};
 
@@ -154,15 +156,15 @@
 		compatible = "mediatek,mt76";
 		reg = <0x0000 0 0 0 0>;
 
-		mediatek,mtd-eeprom = <&factory 0x0>;
+		nvmem-cells = <&eeprom>;
+		nvmem-cell-names = "eeprom";
 		mediatek,disable-radar-background;
 	};
 };
 
 &gmac0 {
-	nvmem-cells = <&macaddr>;
+	nvmem-cells = <&macaddr 2>;
 	nvmem-cell-names = "mac-address";
-	mac-address-increment = <2>;
 };
 
 &gmac1 {
@@ -170,15 +172,12 @@
 	label = "wan";
 	phy-handle = <&ethphy4>;
 
-	nvmem-cells = <&macaddr>;
+	nvmem-cells = <&macaddr 3>;
 	nvmem-cell-names = "mac-address";
-	mac-address-increment = <3>;
 };
 
-&mdio {
-	ethphy4: ethernet-phy@4 {
-		reg = <4>;
-	};
+&ethphy4 {
+	/delete-property/ interrupts;
 };
 
 &switch0 {

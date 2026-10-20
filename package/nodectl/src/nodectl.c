@@ -1,5 +1,5 @@
 /*
- * nodectl - power, console, status and flashing control for Mixtile Blade3
+ * nodectl - power, console and status control for Mixtile Blade3
  * nodes in a Mixtile ClusterBox (MT7620A controller).
  */
 #define _GNU_SOURCE
@@ -17,6 +17,7 @@
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -32,7 +33,6 @@
 #define RUN_DIR "/var/run/nodectl"
 #define LOG_DIR "/var/log/nodectl"
 #define LOCK_DIR "/var/lock"
-#define FLASH_HELPER "/usr/libexec/nodectl/flash"
 #define CONSOLE_BAUD "1500000"
 #define CONSOLE_CLIENTS 8
 #define CONSOLE_ESCAPE 0x1d /* Ctrl-] */
@@ -61,8 +61,6 @@ struct opts {
 	int no_reboot;
 	int yes;
 	int timeout;
-	const char *source;
-	const char *target;
 	char **rest;
 	int nrest;
 };
@@ -540,6 +538,20 @@ static void pcie_release(int n)
 	       "(not running?)", n);
 }
 
+/*
+ * Tell the console server of the node that a new boot starts (or the node
+ * goes off), so its archive starts a new file right there instead of
+ * waiting for a boot banner.
+ */
+static void boot_mark(int n, const char *why)
+{
+	char path[64];
+
+	mkdir(RUN_DIR, 0755);
+	snprintf(path, sizeof(path), RUN_DIR "/node%d.boot", n);
+	write_file(path, why);
+}
+
 static int press(int off, int ms)
 {
 	if (gpio_set(off, 0))
@@ -560,6 +572,7 @@ static int do_poweron(int n, struct opts *o)
 		logmsg(LOG_ERR, "node %d: failed to enable power", n);
 		return -1;
 	}
+	boot_mark(n, "power on");
 	logmsg(LOG_NOTICE, "node %d: power on", n);
 	return 0;
 }
@@ -573,6 +586,7 @@ static int do_poweroff(int n, struct opts *o)
 		logmsg(LOG_ERR, "node %d: failed to cut power", n);
 		return -1;
 	}
+	boot_mark(n, "power off");
 	logmsg(LOG_NOTICE, "node %d: power off", n);
 	return 0;
 }
@@ -589,6 +603,7 @@ static int do_reset(int n, struct opts *o)
 		logmsg(LOG_ERR, "node %d: reset failed", n);
 		return -1;
 	}
+	boot_mark(n, "reset");
 	logmsg(LOG_NOTICE, "node %d: reset pulse sent", n);
 	return 0;
 }
@@ -1032,6 +1047,315 @@ static int console_log_rotate(int n, int fd, off_t *size)
 }
 
 /*
+ * Console archive on the eMMC: one file per boot of the node,
+ * <console_archive_dir>/nodeN/YYYYmmdd-HHMMSS.log (a long boot goes on in
+ * .pNNN.log parts), every line prefixed with the BMC time. A boot starts
+ * with a power on or reset from nodectl, a boot banner (U-Boot, kernel)
+ * or a kernel timestamp that goes back. The oldest boots go when the node
+ * has more than console_archive_mb or console_archive_boots of them.
+ * Only on the ext4 overlay: in RAM it would fill /tmp.
+ */
+#define EXT4_MAGIC	0xEF53
+#define AR_LINE		1024
+#define AR_SPLIT_S	60	/* a banner this soon after a new boot is the same boot */
+
+struct archive {
+	int on, fd, part, stamp, mid, boots_max;
+	char dir[128], boot[32], line[AR_LINE];
+	size_t len;
+	off_t size, part_max, total_max, since_prune;
+	double kt;
+	time_t started;
+};
+
+static void mkdir_p(const char *dir)
+{
+	char p[128], *s;
+
+	snprintf(p, sizeof(p), "%s", dir);
+	for (s = p + 1; *s; s++) {
+		if (*s != '/')
+			continue;
+		*s = 0;
+		mkdir(p, 0755);
+		*s = '/';
+	}
+	mkdir(p, 0755);
+}
+
+static int ar_name_cmp(const struct dirent **a, const struct dirent **b)
+{
+	return strcmp((*a)->d_name, (*b)->d_name);
+}
+
+static int ar_is_log(const struct dirent *d)
+{
+	size_t l = strlen(d->d_name);
+
+	return d->d_name[0] != '.' && l > 4 && !strcmp(d->d_name + l - 4, ".log");
+}
+
+static void ar_file(struct archive *a, char *path, size_t len, const char *boot, int part)
+{
+	if (part > 1)
+		snprintf(path, len, "%s/%s.p%03d.log", a->dir, boot, part);
+	else
+		snprintf(path, len, "%s/%s.log", a->dir, boot);
+}
+
+/* Drop the oldest files until the node is within its limits. */
+static void ar_prune(struct archive *a)
+{
+	struct dirent **list;
+	char path[400], cur[64], boot[16] = "";
+	struct stat st;
+	off_t total = 0;
+	int i, n, boots = 0;
+
+	ar_file(a, path, sizeof(path), a->boot, a->part);
+	snprintf(cur, sizeof(cur), "%s", strrchr(path, '/') + 1);
+	n = scandir(a->dir, &list, ar_is_log, ar_name_cmp);
+	if (n < 0)
+		return;
+	for (i = 0; i < n; i++) {
+		snprintf(path, sizeof(path), "%s/%s", a->dir, list[i]->d_name);
+		if (!stat(path, &st))
+			total += st.st_size;
+		if (strncmp(list[i]->d_name, boot, 15)) {
+			snprintf(boot, sizeof(boot), "%.15s", list[i]->d_name);
+			boots++;
+		}
+	}
+	/* Oldest first; never the file being written. */
+	for (i = 0; i < n && (total > a->total_max || boots > a->boots_max); i++) {
+		if (!strcmp(list[i]->d_name, cur))
+			continue;
+		snprintf(path, sizeof(path), "%s/%s", a->dir, list[i]->d_name);
+		if (!stat(path, &st) && !unlink(path))
+			total -= st.st_size;
+		/* The last file of its boot. */
+		if (i + 1 >= n || strncmp(list[i]->d_name, list[i + 1]->d_name, 15))
+			boots--;
+	}
+	for (i = 0; i < n; i++)
+		free(list[i]);
+	free(list);
+	a->since_prune = 0;
+}
+
+static void ar_raw(struct archive *a, const char *buf, size_t len)
+{
+	if (a->fd >= 0 && !write_all(a->fd, buf, len)) {
+		a->size += len;
+		a->since_prune += len;
+	}
+}
+
+static void ar_stamp(struct archive *a)
+{
+	char ts[32];
+	time_t now = time(NULL);
+	struct tm tm;
+
+	if (!a->stamp)
+		return;
+	strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S ", localtime_r(&now, &tm));
+	ar_raw(a, ts, strlen(ts));
+}
+
+static void ar_note(struct archive *a, const char *what)
+{
+	char buf[128];
+
+	ar_stamp(a);
+	snprintf(buf, sizeof(buf), "=== %s ===\n", what);
+	ar_raw(a, buf, strlen(buf));
+}
+
+static void ar_open(struct archive *a)
+{
+	char path[400];
+	struct stat st;
+
+	if (a->fd >= 0)
+		close(a->fd);
+	ar_file(a, path, sizeof(path), a->boot, a->part);
+	a->fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+	a->size = (a->fd >= 0 && !fstat(a->fd, &st)) ? st.st_size : 0;
+}
+
+static void ar_new_boot(struct archive *a, const char *why)
+{
+	time_t now = time(NULL);
+	struct tm tm;
+	char note[96];
+
+	char path[400];
+	struct stat st;
+	time_t t = now;
+	int i;
+
+	/* Names are unique even for two boots in the same second. */
+	for (i = 0; i < 100; i++, t++) {
+		strftime(a->boot, sizeof(a->boot), "%Y%m%d-%H%M%S", localtime_r(&t, &tm));
+		ar_file(a, path, sizeof(path), a->boot, 1);
+		if (stat(path, &st))
+			break;
+	}
+	a->part = 1;
+	a->started = now;
+	a->kt = 0;
+	ar_open(a);
+	snprintf(note, sizeof(note), "boot (%s)", why);
+	ar_note(a, note);
+	ar_prune(a);
+}
+
+static void ar_init(struct archive *a, int n)
+{
+	struct dirent **list;
+	struct statfs sf;
+	int i, cnt;
+
+	memset(a, 0, sizeof(*a));
+	a->fd = -1;
+	if (!cfg_int("global", "console_archive", 1))
+		return;
+	snprintf(a->dir, sizeof(a->dir), "%s/node%d",
+		 cfg_get("global", "console_archive_dir", "/overlay/log/nodectl"), n);
+	mkdir_p(a->dir);
+	if (statfs(a->dir, &sf) || sf.f_type != EXT4_MAGIC) {
+		logmsg(LOG_WARNING, "node %d: %s is not on the eMMC, console archive off", n, a->dir);
+		return;
+	}
+	a->on = 1;
+	a->stamp = cfg_int("global", "console_archive_stamp", 1);
+	a->total_max = (off_t)cfg_int("global", "console_archive_mb", 512) << 20;
+	a->part_max = (off_t)cfg_int("global", "console_archive_part_mb", 32) << 20;
+	a->boots_max = cfg_int("global", "console_archive_boots", 100);
+	if (a->boots_max < 1)
+		a->boots_max = 1;
+
+	/* Go on with the newest boot: a restart of the server is not a boot. */
+	cnt = scandir(a->dir, &list, ar_is_log, ar_name_cmp);
+	if (cnt > 0) {
+		const char *last = list[cnt - 1]->d_name;
+		const char *p = strstr(last, ".p");
+
+		snprintf(a->boot, sizeof(a->boot), "%.15s", last);
+		a->part = p ? atoi(p + 2) : 1;
+		if (a->part < 1)
+			a->part = 1;
+		a->started = 0;
+		ar_open(a);
+		ar_note(a, "console server started");
+	}
+	for (i = 0; i < cnt; i++)
+		free(list[i]);
+	if (cnt >= 0)
+		free(list);
+	if (cnt <= 0)
+		ar_new_boot(a, "first output");
+}
+
+/* Kernel timestamp at the start of a line, "[  123.456789]"; -1 if none. */
+static double ar_ktime(const char *l)
+{
+	char *end;
+	double t;
+
+	if (*l != '[')
+		return -1;
+	t = strtod(l + 1, &end);
+	return (end != l + 1 && *end == ']') ? t : -1;
+}
+
+static int ar_banner(const char *l)
+{
+	return strstr(l, "U-Boot SPL") || !strncmp(l, "U-Boot ", 7) ||
+	       strstr(l, "Booting Linux on physical CPU");
+}
+
+/* A whole line (or a cut one when lone): decide on a new boot, then write. */
+static void ar_line(struct archive *a, int whole)
+{
+	const char *l = a->line;
+	double kt;
+	int boot = 0;
+
+	a->line[a->len] = 0;
+	if (!a->mid) {
+		while (*l == '\r')
+			l++;
+		kt = ar_ktime(l);
+		if (ar_banner(l))
+			boot = 1;
+		if (kt >= 0) {
+			if (a->kt > 5 && kt < a->kt - 5)
+				boot = 1;
+			a->kt = kt;
+		}
+		if (boot && time(NULL) - a->started > AR_SPLIT_S)
+			ar_new_boot(a, "boot banner");
+		else if (a->size > a->part_max) {
+			a->part++;
+			ar_open(a);
+		}
+		ar_stamp(a);
+	}
+	ar_raw(a, a->line, a->len);
+	a->len = 0;
+	a->mid = !whole;
+	if (a->since_prune > (4 << 20))
+		ar_prune(a);
+}
+
+static void ar_write(struct archive *a, const char *buf, ssize_t r)
+{
+	ssize_t i;
+
+	if (!a->on)
+		return;
+	for (i = 0; i < r; i++) {
+		a->line[a->len++] = buf[i];
+		if (buf[i] == '\n')
+			ar_line(a, 1);
+		else if (a->len == AR_LINE - 1)
+			ar_line(a, 0);
+	}
+}
+
+/* Output that stopped mid-line (a prompt) goes out after a second. */
+static void ar_flush(struct archive *a)
+{
+	if (a->on && a->len)
+		ar_line(a, 0);
+}
+
+/* A power action of nodectl for this node. */
+static void ar_mark(struct archive *a, int n)
+{
+	char path[64], why[32] = "";
+	FILE *fp;
+
+	snprintf(path, sizeof(path), RUN_DIR "/node%d.boot", n);
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	if (!fgets(why, sizeof(why), fp))
+		why[0] = 0;
+	fclose(fp);
+	unlink(path);
+	if (!a->on)
+		return;
+	ar_flush(a);
+	if (!strcmp(why, "power off"))
+		ar_note(a, "power off (nodectl)");
+	else
+		ar_new_boot(a, why[0] ? why : "nodectl");
+}
+
+/*
  * Console server: keeps the node UART open, appends everything to
  * /var/log/nodectl/consoleN.log (rotated at console_log_kb) and relays it to
  * every client on a unix socket, so boot output is never lost and several
@@ -1042,6 +1366,7 @@ static int cmd_consoled(struct opts *o)
 	int n = single_node(o);
 	off_t log_max = (off_t)cfg_int("global", "console_log_kb", 512) * 1024, log_size;
 	struct pollfd pfd[CONSOLE_CLIENTS + 2];
+	struct archive ar;
 	struct sockaddr_un sa = { .sun_family = AF_UNIX };
 	int clients[CONSOLE_CLIENTS];
 	int tty, srv, logfd, i, c, nfds;
@@ -1075,6 +1400,7 @@ static int cmd_consoled(struct opts *o)
 	}
 	chmod(sa.sun_path, 0600);
 	logfd = console_log_open(n, &log_size);
+	ar_init(&ar, n);
 	logmsg(LOG_INFO, "node %d: console server started", n);
 
 	while (!consoled_stop) {
@@ -1087,10 +1413,17 @@ static int cmd_consoled(struct opts *o)
 			pfd[nfds].events = POLLIN;
 			nfds++;
 		}
-		if (poll(pfd, nfds, -1) < 0) {
+		/* Wake up every second for the archive (marks, cut lines). */
+		i = poll(pfd, nfds, 1000);
+		ar_mark(&ar, n);
+		if (i < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
+		}
+		if (i == 0) {
+			ar_flush(&ar);
+			continue;
 		}
 
 		if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -1104,6 +1437,7 @@ static int cmd_consoled(struct opts *o)
 				break;
 			}
 			if (r > 0) {
+				ar_write(&ar, buf, r);
 				if (logfd >= 0 && !write_all(logfd, buf, r)) {
 					log_size += r;
 					if (log_max > 0 && log_size > log_max)
@@ -1140,6 +1474,9 @@ static int cmd_consoled(struct opts *o)
 			}
 		}
 	}
+	ar_flush(&ar);
+	if (ar.fd >= 0)
+		close(ar.fd);
 	unlink(sa.sun_path);
 	return consoled_stop ? EXIT_OK : EXIT_FAIL;
 }
@@ -1261,6 +1598,21 @@ static int cmd_send(struct opts *o)
 	return ret;
 }
 
+/* TCP connect check for scripts (busybox nc has no -z): exit 0 if open. */
+static int cmd_probe(struct opts *o)
+{
+	int port, ms;
+
+	if (o->nrest < 2 || (port = atoi(o->rest[1])) < 1 || port > 65535) {
+		fprintf(stderr, "usage: nodectl probe IPADDR PORT [TIMEOUT_MS]\n");
+		return EXIT_USAGE;
+	}
+	ms = o->nrest > 2 ? atoi(o->rest[2]) : 1500;
+	if (ms < 1 || ms > 10000)
+		ms = 1500;
+	return tcp_check(o->rest[0], port, ms) ? EXIT_OK : EXIT_FAIL;
+}
+
 static int cmd_fan(struct opts *o)
 {
 	char path[64], buf[32];
@@ -1332,63 +1684,6 @@ static int cmd_ssh(struct opts *o)
 	return EXIT_FAIL;
 }
 
-static int cmd_flash(struct opts *o)
-{
-	int n = single_node(o);
-	const char *ip = node_cfg(n, "ipaddr", NULL);
-	char node[4];
-	int st, ret;
-	pid_t pid;
-
-	if (!o->source) {
-		fprintf(stderr, "flash requires -f <image file or https:// URL>\n");
-		return EXIT_USAGE;
-	}
-	if (!ip) {
-		logmsg(LOG_ERR, "node %d: no ipaddr configured", n);
-		return EXIT_FAIL;
-	}
-	if (!o->yes && isatty(0)) {
-		char ans[8] = "";
-		printf("This will OVERWRITE %s on node %d (%s). Type 'yes' to continue: ",
-		       o->target ? o->target : cfg_get("global", "flash_target", "/dev/mmcblk0"),
-		       n, ip);
-		fflush(stdout);
-		if (!fgets(ans, sizeof(ans), stdin) || strncmp(ans, "yes", 3))
-			return EXIT_FAIL;
-	}
-
-	background("flash", o);
-	if (node_lock(n, "flash"))
-		return EXIT_BUSY;
-
-	snprintf(node, sizeof(node), "%d", n);
-	setenv("NODE", node, 1);
-	setenv("NODE_IP", ip, 1);
-	setenv("NODE_USER", node_cfg(n, "ssh_user", cfg_get("global", "ssh_user", "root")), 1);
-	if (node_cfg(n, "ssh_password", NULL))
-		setenv("SSHPASS", node_cfg(n, "ssh_password", NULL), 1);
-	setenv("SOURCE", o->source, 1);
-	setenv("TARGET", o->target ? o->target : cfg_get("global", "flash_target", "/dev/mmcblk0"), 1);
-
-	logmsg(LOG_NOTICE, "node %d: flashing %s", n, o->source);
-	pid = fork();
-	if (pid == 0) {
-		execl(FLASH_HELPER, FLASH_HELPER, (char *)NULL);
-		_exit(127);
-	}
-	ret = (pid > 0 && waitpid(pid, &st, 0) > 0 && WIFEXITED(st)) ? WEXITSTATUS(st) : EXIT_FAIL;
-	logmsg(ret ? LOG_ERR : LOG_NOTICE, "node %d: flash %s", n, ret ? "FAILED" : "finished");
-	if (!ret && !o->no_reboot) {
-		struct opts h = { .hard = 1 };
-		logmsg(LOG_NOTICE, "node %d: power cycling into the new image", n);
-		if (do_reboot(n, &h))
-			ret = EXIT_FAIL;
-	}
-	node_unlock(n);
-	return ret ? EXIT_FAIL : EXIT_OK;
-}
-
 static int cmd_boot(struct opts *o)
 {
 	const char *action = cfg_get("global", "boot_action", "poweron");
@@ -1433,9 +1728,8 @@ static void usage(FILE *fp)
 	"  consoled -n N                    console server with log (run by procd)\n"
 	"  ssh      -n N [-- command...]    SSH to the node\n"
 	"  fan      [PERCENT]               show or set fan duty\n"
-	"  flash    -n N -f IMAGE|URL [--target DEV] [--no-reboot] [-y]\n"
-	"                                   stream an OS image to the node disk\n"
 	"  boot                             apply boot_action (used by init)\n"
+	"  probe    IPADDR PORT [MS]        exit 0 if a TCP connect succeeds\n"
 	"\n"
 	"Common options:\n"
 	"  --bg     run in background, log to " LOG_DIR "/nodeN.log\n"
@@ -1493,12 +1787,6 @@ static void parse_opts(int argc, char **argv, struct opts *o)
 		} else if (!strcmp(a, "--timeout") && next) {
 			o->timeout = atoi(next);
 			i++;
-		} else if (!strcmp(a, "-f") && next) {
-			o->source = next;
-			i++;
-		} else if (!strcmp(a, "--target") && next) {
-			o->target = next;
-			i++;
 		} else if (a[0] != '-') {
 			o->rest = &argv[i];
 			o->nrest = argc - i;
@@ -1530,6 +1818,10 @@ int main(int argc, char **argv)
 	}
 	cmd = argv[1];
 	parse_opts(argc - 2, argv + 2, &o);
+
+	/* No GPIO, config or syslog needed. */
+	if (!strcmp(cmd, "probe"))
+		return cmd_probe(&o);
 
 	openlog("nodectl", 0, LOG_DAEMON);
 	cfg_load();
@@ -1571,8 +1863,6 @@ int main(int argc, char **argv)
 		ret = cmd_fan(&o);
 	} else if (!strcmp(cmd, "ssh")) {
 		ret = cmd_ssh(&o);
-	} else if (!strcmp(cmd, "flash")) {
-		ret = cmd_flash(&o);
 	} else if (!strcmp(cmd, "boot")) {
 		ret = cmd_boot(&o);
 	} else {

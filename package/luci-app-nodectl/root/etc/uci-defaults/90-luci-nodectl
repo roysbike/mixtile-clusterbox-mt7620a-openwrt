@@ -17,8 +17,9 @@ uci -q get ttyd.nodectl >/dev/null || {
 	EOF
 }
 
-mkdir -p /opt/pxe /var/run/node-exporter
-[ -e /www/pxe ] || ln -s /opt/pxe /www/pxe
+mkdir -p /var/run/node-exporter
+# PXE and flashing were removed; drop the web link of older firmware.
+[ -L /www/pxe ] && rm -f /www/pxe
 
 for s in blade3-boot nodectl-console nodectl-metrics; do
 	[ -x "/etc/init.d/$s" ] || continue

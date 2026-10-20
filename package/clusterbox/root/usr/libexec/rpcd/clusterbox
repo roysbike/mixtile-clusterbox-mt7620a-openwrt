@@ -1,0 +1,737 @@
+#!/bin/sh
+# rpcd backend of the ClusterBox web UI (ubus object "clusterbox").
+#
+# Changes that can cut off the browser (management access, restoring a
+# configuration snapshot) are applied with a guard: a snapshot is taken
+# first, and unless the browser calls "confirm" with the returned token
+# within GUARD seconds, that snapshot is restored.
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions/network.sh
+
+HIST=/usr/libexec/clusterbox/confhist
+RUN=/var/run/clusterbox
+PENDING=$RUN/pending
+GUARD=120
+
+mkdir -p "$RUN"
+
+reply() {
+	json_init
+	json_add_int code "$1"
+	json_add_string message "$2"
+	json_dump
+}
+
+valid_port() {
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+# Arm the guard: restore snapshot $2 unless confirmed. Prints the token.
+# $1 (kind) must not contain spaces: the pending file is split on them.
+arm() {
+	local kind=$1 snap=$2 tok
+	tok=$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom)
+	echo "$tok $(( $(date +%s) + GUARD )) $kind $snap" > "$PENDING"
+	(
+		sleep "$GUARD"
+		read -r t _ k s < "$PENDING" 2>/dev/null || exit 0
+		[ "$t" = "$tok" ] || exit 0
+		rm -f "$PENDING"
+		logger -t clusterbox "$k not confirmed within $GUARD s, restoring snapshot $s"
+		"$HIST" restore-only "$s" >/dev/null 2>&1
+	) </dev/null >/dev/null 2>&1 &
+	echo "$tok"
+}
+
+# A guarded change is waiting for its confirmation.
+busy() {
+	local d
+	read -r _ d _ < "$PENDING" 2>/dev/null || return 1
+	[ "$d" -gt "$(date +%s)" ]
+}
+
+# Cached probe: run "$2" at most every $3 seconds in the background,
+# return the last result (file $RUN/$1).
+cached() {
+	local f="$RUN/$1" age=999999
+	[ -f "$f" ] && age=$(( $(date +%s) - $(date -r "$f" +%s 2>/dev/null || echo 0) ))
+	if [ "$age" -ge "$3" ] && mkdir "$f.lock" 2>/dev/null; then
+		( eval "$2" > "$f.new" 2>/dev/null; mv "$f.new" "$f"; rmdir "$f.lock" ) </dev/null >/dev/null 2>&1 &
+	fi
+	cat "$f" 2>/dev/null
+}
+
+sysfs_link() {
+	local d=/sys/bus/pci/devices/$1
+	[ -r "$d/current_link_speed" ] || return 0
+	echo "$(cat "$d/current_link_speed" 2>/dev/null)|$(cat "$d/current_link_width" 2>/dev/null)"
+}
+
+netdev_bytes() {
+	echo "$(cat /sys/class/net/$1/statistics/rx_bytes 2>/dev/null || echo 0) $(cat /sys/class/net/$1/statistics/tx_bytes 2>/dev/null || echo 0)"
+}
+
+topology() {
+	local ip gw dev up proto sub fb link rx tx inet ts ts_ip sw slink nodes base s dip dport
+
+	network_flush_cache
+	network_get_ipaddr ip wan
+	network_get_subnet sub wan
+	network_get_gateway gw wan
+	network_get_device dev wan
+	network_get_protocol proto wan
+	network_is_up wan && up=1 || up=0
+	[ -n "$dev" ] || dev=$(uci -q get network.wan.device)
+	fb=
+	[ -f "$RUN/wan-fallback" ] && read -r fb _ < "$RUN/wan-fallback"
+	link=$(swconfig dev switch0 port 5 get link 2>/dev/null)
+
+	json_init
+	json_add_object bmc
+	json_add_string hostname "$(uci -q get system.@system[0].hostname)"
+	json_add_int uptime "$(cut -d. -f1 /proc/uptime)"
+	json_add_string load "$(cut -d' ' -f1-3 /proc/loadavg)"
+	json_add_int mem_total_kb "$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+	json_add_int mem_avail_kb "$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
+	json_add_string firmware "$(sed -n 's/^FIRMWARE_VERSION="\(.*\)"/\1/p' /etc/mixtile-release 2>/dev/null)"
+	json_close_object
+
+	json_add_object wan
+	json_add_boolean up "$up"
+	json_add_string proto "$proto"
+	json_add_string device "$dev"
+	json_add_string ipaddr "${sub:-$ip}"
+	json_add_string gateway "$gw"
+	json_add_string fallback "$fb"
+	json_add_string link "$link"
+	read -r rx tx <<-EOF
+		$(netdev_bytes "$dev")
+	EOF
+	json_add_double rx_bytes "$rx"
+	json_add_double tx_bytes "$tx"
+	json_close_object
+
+	inet=$(cached inet 'ping -c 1 -W 2 1.1.1.1 2>/dev/null | sed -n "s/.*time=\([0-9.]*\).*/\1/p"' 30)
+	json_add_object internet
+	json_add_boolean up "$([ -n "$inet" ] && echo 1 || echo 0)"
+	json_add_string rtt_ms "$inet"
+	json_close_object
+
+	json_add_object tailscale
+	if [ -x /usr/sbin/tailscale ]; then
+		ts=$(cached tsstate 'tailscale status --json --peers=false 2>/dev/null | jsonfilter -e "@.BackendState"' 30)
+		ts_ip=$(cached tsip 'tailscale ip -4 2>/dev/null | head -n 1' 30)
+		json_add_boolean installed 1
+		json_add_string state "$ts"
+		json_add_string ipaddr "$ts_ip"
+	else
+		json_add_boolean installed 0
+	fi
+	json_close_object
+
+	# PCIe: MT7620A root port -> ASM2824 (01:00.0 upstream) -> 02:xx.0 -> blades.
+	sw=$(cat /sys/bus/pci/devices/0000:01:00.0/vendor 2>/dev/null):$(cat /sys/bus/pci/devices/0000:01:00.0/device 2>/dev/null)
+	slink=$(sysfs_link 0000:01:00.0)
+	json_add_object pcie
+	json_add_boolean switch "$([ "$sw" = 0x1b21:0x2824 ] && echo 1 || echo 0)"
+	json_add_string switch_id "$sw"
+	json_add_string uplink "$slink"
+	case "$(cat /sys/class/net/omi0/operstate 2>/dev/null)" in
+		up|unknown) json_add_boolean omi0 1 ;;
+		*) json_add_boolean omi0 0 ;;
+	esac
+	json_add_string omi_driver "$([ -d /sys/module/omi_rc ] && echo omi-rc || { pidof openmiop-rc >/dev/null && echo openmiop-rc; })"
+	read -r rx tx <<-EOF
+		$(netdev_bytes omi0)
+	EOF
+	json_add_double rx_bytes "$rx"
+	json_add_double tx_bytes "$tx"
+	json_close_object
+
+	# Port forwards to the cluster (src_dip_auto: added for the cluster,
+	# e.g. Kubernetes API, ingress): is the target answering?
+	json_add_array services
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([A-Za-z0-9_]*\)=redirect$/\1/p'); do
+		[ "$(uci -q get "firewall.$s.src_dip_auto")" = 1 ] || continue
+		[ "$(uci -q get "firewall.$s.enabled")" = 0 ] && continue
+		dip=$(uci -q get "firewall.$s.dest_ip")
+		dport=$(uci -q get "firewall.$s.dest_port" || uci -q get "firewall.$s.src_dport")
+		case "$dip" in ''|*[!0-9.]*) continue ;; esac
+		case "$dport" in ''|*[!0-9]*) continue ;; esac
+		json_add_object ""
+		json_add_string name "$(uci -q get "firewall.$s.name" || echo "$s")"
+		json_add_string port "$(uci -q get "firewall.$s.src_dport")"
+		json_add_string target "$dip:$dport"
+		json_add_string up "$(cached "svc_$s" "/bin/nodectl probe $dip $dport 1500 && echo 1 || echo 0" 30)"
+		json_close_object
+	done
+	json_close_array
+
+	nodes=$(/bin/nodectl status --json 2>/dev/null)
+	[ -n "$nodes" ] || nodes='{"nodes":[]}'
+	base=$(json_dump)
+	# nodectl prints {"nodes":[...]}: splice its array into our object.
+	printf '%s, "cluster": %s }\n' "${base%\}}" "$nodes"
+}
+
+admin_get() {
+	local z s
+	json_init
+	for z in http_port https_port redirect_https ssh_port ssh_password terminal_port console_port; do
+		json_add_string "$z" "$(uci -q get clusterbox.admin.$z)"
+	done
+	json_add_array zones
+	for z in $(uci -q get clusterbox.admin.zones); do json_add_string "" "$z"; done
+	json_close_array
+	json_add_array all_zones
+	for s in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+		json_add_string "" "$(uci -q get firewall.$s.name)"
+	done
+	json_close_array
+	json_dump
+}
+
+admin_set() {
+	local http_port https_port redirect_https ssh_port ssh_password terminal_port console_port
+	local p seen z snap tok zl=
+
+	json_get_vars http_port https_port redirect_https ssh_port ssh_password terminal_port console_port
+	for p in "$http_port" "$ssh_port" "$terminal_port" "$console_port"; do
+		valid_port "$p" || { reply 2 "invalid port: $p"; return; }
+	done
+	[ "${https_port:-0}" = 0 ] || valid_port "$https_port" || { reply 2 "invalid HTTPS port"; return; }
+	seen=" "
+	for p in $http_port ${https_port:-0} $ssh_port $terminal_port $console_port; do
+		[ "$p" = 0 ] && continue
+		case "$seen" in *" $p "*) reply 2 "port $p is used twice"; return ;; esac
+		seen="$seen$p "
+	done
+	if json_is_a zones array; then
+		json_select zones
+		local i=1
+		while json_is_a "$i" string; do
+			json_get_var z "$i"
+			case "$z" in ''|*[!A-Za-z0-9_-]*) json_select ..; reply 2 "invalid zone name"; return ;; esac
+			uci -q show firewall | grep -q "\.name='$z'$" || { json_select ..; reply 2 "no firewall zone $z"; return; }
+			zl="$zl $z"
+			i=$((i + 1))
+		done
+		json_select ..
+	fi
+	[ -n "$zl" ] || { reply 2 "management must stay reachable from at least one zone"; return; }
+	busy && { reply 3 "confirm the previous change first (or wait until it is rolled back)"; return; }
+
+	snap=$("$HIST" snapshot "before access change") || { reply 1 "snapshot failed"; return; }
+	uci -q batch <<-EOF
+		set clusterbox.admin.http_port='$http_port'
+		set clusterbox.admin.https_port='${https_port:-0}'
+		set clusterbox.admin.redirect_https='$([ "$redirect_https" = 1 ] && echo 1 || echo 0)'
+		set clusterbox.admin.ssh_port='$ssh_port'
+		set clusterbox.admin.ssh_password='$([ "$ssh_password" = 0 ] && echo 0 || echo 1)'
+		set clusterbox.admin.terminal_port='$terminal_port'
+		set clusterbox.admin.console_port='$console_port'
+		delete clusterbox.admin.zones
+	EOF
+	for z in $zl; do uci -q add_list "clusterbox.admin.zones=$z"; done
+	uci -q commit clusterbox
+	tok=$(arm access "$snap")
+	# Reply first; the web server restarts with the new ports.
+	( sleep 2; /usr/libexec/clusterbox/apply admin ) </dev/null >/dev/null 2>&1 &
+	json_init
+	json_add_int code 0
+	json_add_string token "$tok"
+	json_add_int timeout "$GUARD"
+	json_dump
+}
+
+# mixtile still has the factory password (mixtile): the UI asks to change
+# it at login.
+MIXTILE_FACTORY='$1$ambnoHhC$HGFwwM1jpS9IjgwG503Cp/'
+password_state() {
+	local h
+	h=$(awk -F: '$1 == "mixtile" { print $2 }' /etc/shadow)
+	json_init
+	json_add_boolean factory "$([ "$h" = "$MIXTILE_FACTORY" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+pending() {
+	local t d k s
+	json_init
+	if read -r t d k s < "$PENDING" 2>/dev/null; then
+		json_add_boolean pending 1
+		json_add_string kind "$k"
+		json_add_int remaining $(( d - $(date +%s) ))
+	else
+		json_add_boolean pending 0
+	fi
+	json_dump
+}
+
+confirm() {
+	local token t
+	json_get_vars token
+	read -r t _ < "$PENDING" 2>/dev/null
+	if [ -n "$t" ] && [ "$t" = "$token" ]; then
+		rm -f "$PENDING"
+		logger -t clusterbox "change confirmed"
+		reply 0 "confirmed"
+	else
+		reply 2 "nothing to confirm"
+	fi
+}
+
+history_list() {
+	local id time reason changed size keep
+	keep=$(uci -q get clusterbox.history.keep)
+	json_init
+	json_add_string dir "$("$HIST" dir)"
+	json_add_int keep "${keep:-50}"
+	json_add_array snapshots
+	# A loop at the end of a pipe runs in a subshell and would lose the
+	# jshn state: read from a file instead.
+	"$HIST" list > "$RUN/list.$$"
+	while IFS="$(printf '\t')" read -r id time reason changed size; do
+		json_add_object
+		json_add_string id "$id"
+		json_add_int time "${time:-0}"
+		json_add_string reason "$reason"
+		json_add_string changed "$changed"
+		json_add_int size "${size:-0}"
+		json_close_object
+	done < "$RUN/list.$$"
+	rm -f "$RUN/list.$$"
+	json_close_array
+	json_dump
+}
+
+history_file() {
+	local id path snap cur
+	json_get_vars id path
+	case "$path" in /*) ;; *) reply 2 "invalid path"; return ;; esac
+	"$HIST" files "$id" 2>/dev/null | grep -qx "$path" || { reply 2 "$path not in snapshot $id"; return; }
+	json_init
+	json_add_string path "$path"
+	json_add_string snapshot "$("$HIST" show "$id" "$path" 2>/dev/null | head -c 262144)"
+	if [ -f "$path" ]; then
+		json_add_boolean exists 1
+		json_add_string current "$(head -c 262144 "$path")"
+	else
+		json_add_boolean exists 0
+	fi
+	json_dump
+}
+
+ts_status() {
+	local st
+	json_init
+	if [ ! -x /usr/sbin/tailscale ]; then
+		json_add_boolean installed 0
+		json_dump
+		return
+	fi
+	st=$(tailscale status --json --peers=false 2>/dev/null)
+	json_add_boolean installed 1
+	json_add_string state "$(echo "$st" | jsonfilter -e '@.BackendState' 2>/dev/null)"
+	json_add_string auth_url "$(echo "$st" | jsonfilter -e '@.AuthURL' 2>/dev/null)"
+	json_add_string dnsname "$(echo "$st" | jsonfilter -e '@.Self.DNSName' 2>/dev/null)"
+	json_add_string ipaddr "$(echo "$st" | jsonfilter -e '@.Self.TailscaleIPs[0]' 2>/dev/null)"
+	json_add_string routes "$(echo "$st" | jsonfilter -e '@.Self.PrimaryRoutes[*]' 2>/dev/null | tr '\n' ' ')"
+	json_dump
+}
+
+ts_up() {
+	local authkey routes ssh
+	json_get_vars authkey routes ssh
+	[ -x /usr/sbin/tailscale ] || { reply 2 "tailscale is not installed"; return; }
+	case "$authkey" in *[!A-Za-z0-9_-]*) reply 2 "invalid auth key"; return ;; esac
+	set -- up --reset --accept-dns=false --timeout=30s
+	[ "$routes" = 1 ] && set -- "$@" --advertise-routes=10.20.0.0/24
+	[ "$ssh" = 1 ] && set -- "$@" --ssh
+	if [ -n "$authkey" ]; then
+		set -- "$@" --auth-key="$authkey"
+		out=$(tailscale "$@" 2>&1) && reply 0 "connected" || reply 1 "$out"
+	else
+		# Without a key "up" waits for the browser login; the login URL
+		# shows up in the status (AuthURL) a moment later.
+		( tailscale "$@" ) </dev/null >/dev/null 2>&1 &
+		sleep 3
+		reply 0 "login started"
+	fi
+}
+
+# Node availability (availwatch): the events of the last "hours" and
+# the state of every node (and of the watcher, node 0) before them.
+availability() {
+	local hours f now
+	json_get_vars hours
+	case "$hours" in ''|*[!0-9]*) hours=24 ;; esac
+	[ "$hours" -gt 2160 ] && hours=2160
+	f=/overlay/log/clusterbox/availability
+	[ -f "$f" ] || f=/var/log/clusterbox/availability
+	now=$(date +%s)
+	awk -v from=$((now - hours * 3600)) -v now="$now" '
+		$1 !~ /^[0-9]+$/ || $2 !~ /^[0-4]$/ || $3 !~ /^[a-z]+$/ { next }
+		$1 < from { before[$2] = $3; next }
+		{ ev[n++] = "[" $1 "," $2 ",\"" $3 "\"]" }
+		END {
+			printf "{\"now\":%d,\"from\":%d,\"initial\":{", now, from
+			sep = ""
+			for (k in before) { printf "%s\"%s\":\"%s\"", sep, k, before[k]; sep = "," }
+			printf "},\"events\":["
+			for (i = 0; i < n; i++) printf "%s%s", (i ? "," : ""), ev[i]
+			print "]}"
+		}' "$f" 2>/dev/null || echo '{"events":[]}'
+}
+
+# Console archive of nodectl: <dir>/nodeN/<boot>[.pNNN].log
+console_dir() {
+	echo "$(uci -q get nodectl.global.console_archive_dir || echo /overlay/log/nodectl)/node$1"
+}
+
+valid_node() {
+	case "$1" in 1|2|3|4) return 0 ;; esac
+	reply 2 "invalid node"
+	return 1
+}
+
+# Console bytes as JSON-safe text: control characters except tab,
+# newline, CR and ESC dropped; bytes above 0x7f (line noise while a blade
+# resets, not valid UTF-8, which rpcd rejects) shown as "?".
+text_bytes() {
+	tr -d '\000-\010\013\014\016-\032\034-\037' | tr '\200-\377' '?'
+}
+
+# stdin as a JSON string: the bytes as they are, quotes, backslashes and
+# the control characters left by tr escaped. jshn cannot carry this
+# much: it hands strings over in the environment (128 KiB at most).
+json_text() {
+	local t r e
+	t=$(printf '\t'); r=$(printf '\r'); e=$(printf '\033')
+	# Escaping in sed: busybox awk's gsub() drops the backslash of "\\"
+	# and "\"" in the replacement.
+	{ cat; printf x; } |
+		sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$t/\\\\t/g" -e "s/$r/\\\\r/g" -e "s/$e/\\\\u001b/g" |
+		awk 'BEGIN { printf "\"" } NR > 1 { printf "%s\\n", prev } { prev = $0 } END { sub(/x$/, "", prev); printf "%s\"", prev }'
+}
+
+file_size() {
+	ls -ln "$1" 2>/dev/null | awk '{ print $5 + 0 }'
+}
+
+console_boots() {
+	local node d f
+	json_get_vars node
+	valid_node "$node" || return
+	d=$(console_dir "$node")
+	json_init
+	json_add_boolean archive "$([ -d "$d" ] && echo 1 || echo 0)"
+	json_add_array files
+	for f in "$d"/*.log; do
+		[ -f "$f" ] || continue
+		json_add_object ""
+		json_add_string name "${f##*/}"
+		json_add_double size "$(file_size "$f")"
+		json_add_int mtime "$(date -r "$f" +%s)"
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+# Bytes [offset, offset+length) of one file as text (text_bytes); "next"
+# is the offset after them.
+console_read() {
+	local node name offset length f size skip
+	json_get_vars node name offset length
+	valid_node "$node" || return
+	echo "$name" | grep -qE '^[0-9]{8}-[0-9]{6}(\.p[0-9]{3})?\.log$' || { reply 2 "invalid file"; return; }
+	f=$(console_dir "$node")/$name
+	[ -f "$f" ] || { reply 2 "no such file"; return; }
+	case "$offset" in ''|*[!0-9]*) offset=0 ;; esac
+	case "$length" in ''|*[!0-9]*) length=131072 ;; esac
+	[ "$length" -gt 262144 ] && length=262144
+	size=$(file_size "$f")
+	[ "$offset" -gt "$size" ] && offset=$size
+	[ $((offset + length)) -gt "$size" ] && length=$((size - offset))
+	skip=$((offset % 4096))
+	printf '{ "name": "%s", "size": %d, "offset": %d, "next": %d, "data": ' \
+		"$name" "$size" "$offset" $((offset + length))
+	# dd seeks to the 4 KiB block, tail cuts the rest.
+	dd if="$f" bs=4096 skip=$((offset / 4096)) count=$(((skip + length + 4095) / 4096)) 2>/dev/null |
+		tail -c +$((skip + 1)) | head -c "$length" | text_bytes | json_text
+	echo ' }'
+}
+
+# Case-insensitive literal search in all files of one boot, terminal
+# escapes ignored: up to 500 lines as "<file> <offset of the line> <text>".
+console_grep() {
+	local node boot pattern d f
+	json_get_vars node boot pattern
+	valid_node "$node" || return
+	echo "$boot" | grep -qE '^[0-9]{8}-[0-9]{6}$' || { reply 2 "invalid boot"; return; }
+	[ -n "$pattern" ] && [ ${#pattern} -le 200 ] || { reply 2 "pattern: 1-200 characters"; return; }
+	d=$(console_dir "$node")
+	printf '{ "matches": '
+	for f in "$d/$boot.log" "$d/$boot".p*.log; do
+		[ -f "$f" ] || continue
+		P="$pattern" awk -v name="${f##*/}" '
+			BEGIN { p = tolower(ENVIRON["P"]); esc = "\033\\[[0-9;?]*[ -/]*[@-~]" }
+			{ l = $0; gsub(esc, "", l) }
+			index(tolower(l), p) { print name, off + 0, substr(l, 1, 400) }
+			{ off += length($0) + 1 }' "$f"
+	done | head -n 500 | text_bytes | json_text
+	echo ' }'
+}
+
+# Firmware (mixtile-update): what runs, what the last release check
+# found, the update in progress.
+MU=/usr/libexec/mixtile-update
+
+# Cluster description for the home page (UCI clusterbox.cluster and
+# clusterbox.node1..4): the BMC does not see Kubernetes, the operator
+# writes the names and roles. Newlines are kept as the two characters \n.
+INFO_NODE_KEYS="label role note"
+
+info_clean() {
+	printf '%s' "$1" | tr -d '\000-\011\013-\037' | sed ':a;N;$!ba;s/\n/\\n/g' | cut -c1-"$2"
+}
+
+info_get() {
+	local id k
+	json_init
+	json_add_string name "$(uci -q get clusterbox.cluster.name)"
+	json_add_string description "$(uci -q get clusterbox.cluster.description)"
+	json_add_object nodes
+	for id in 1 2 3 4; do
+		json_add_object "$id"
+		for k in $INFO_NODE_KEYS; do json_add_string "$k" "$(uci -q get clusterbox.node$id.$k)"; done
+		json_close_object
+	done
+	json_close_object
+	json_dump
+}
+
+info_set() {
+	local info name description id k v
+	json_get_vars info
+	json_load "$info" 2>/dev/null || { reply 2 "info: not JSON"; return; }
+	json_get_vars name description
+	uci -q get clusterbox.cluster >/dev/null || uci set clusterbox.cluster=cluster
+	uci set clusterbox.cluster.name="$(info_clean "$name" 64)"
+	uci set clusterbox.cluster.description="$(info_clean "$description" 400)"
+	if json_select nodes 2>/dev/null; then
+		for id in 1 2 3 4; do
+			json_select "$id" 2>/dev/null || continue
+			uci -q get clusterbox.node$id >/dev/null || uci set clusterbox.node$id=node
+			for k in $INFO_NODE_KEYS; do
+				v=; json_get_var v "$k"
+				uci set clusterbox.node$id.$k="$(info_clean "$v" 64)"
+			done
+			json_select ..
+		done
+		json_select ..
+	fi
+	uci commit clusterbox && reply 0 "saved" || reply 1 "uci commit failed"
+}
+
+# OpenVPN (server and uploaded client connections): /usr/libexec/clusterbox/ovpn.
+OVPN=/usr/libexec/clusterbox/ovpn
+
+# Run ovpn; reply {code, message} with its output (stderr on failure).
+ovpn_run() {
+	local out
+	out=$("$OVPN" "$@" 2>&1) && reply 0 "$out" || reply 1 "$out"
+}
+
+# Run ovpn; reply {code, text} with its stdout as a JSON string.
+ovpn_text() { tool_text "$OVPN" "$@"; }
+
+# Packages (apk): /usr/libexec/clusterbox/pkg.
+PKG=/usr/libexec/clusterbox/pkg
+
+# Run a helper; reply {code, text} with its stdout, {code, message} with
+# its stderr on failure.
+tool_text() {
+	local rc
+	"$@" > "$RUN/ovpn.$$" 2> "$RUN/ovpn.err.$$"
+	rc=$?
+	if [ $rc -ne 0 ]; then
+		reply 1 "$(cat "$RUN/ovpn.err.$$")"
+	else
+		printf '{ "code": 0, "text": '
+		json_text < "$RUN/ovpn.$$"
+		printf ' }\n'
+	fi
+	rm -f "$RUN/ovpn.$$" "$RUN/ovpn.err.$$"
+}
+
+fw_status() {
+	local st chk base p2
+	st=$("$MU" status 2>/dev/null); [ -n "$st" ] || st='{}'
+	chk=$(cat /tmp/mixtile-update/check.json 2>/dev/null); [ -n "$chk" ] || chk='{}'
+	p2=$(awk '$4 == "mmcblk0p2" { print $3 }' /proc/partitions)
+	json_init
+	json_add_string openwrt "$(. /etc/openwrt_release; echo "$DISTRIB_RELEASE")"
+	json_add_string openwrt_revision "$(. /etc/openwrt_release; echo "$DISTRIB_REVISION")"
+	json_add_string kernel "$(uname -r)"
+	json_add_int rootfs_used_kb "$(df -k /rom 2>/dev/null | awk 'NR == 2 { print $3 }')"
+	json_add_int rootfs_part_kb "${p2:-0}"
+	json_add_int overlay_used_kb "$(df -k /overlay 2>/dev/null | awk 'NR == 2 { print $3 }')"
+	json_add_int overlay_size_kb "$(df -k /overlay 2>/dev/null | awk 'NR == 2 { print $2 }')"
+	json_add_boolean auto_check "$([ "$(uci -q get mixtile-update.main.auto_check)" = 0 ] && echo 0 || echo 1)"
+	json_add_int check_interval "$(uci -q get mixtile-update.main.check_interval || echo 12)"
+	json_add_boolean checking "$(pgrep -f 'mixtile-update check' >/dev/null && echo 1 || echo 0)"
+	json_add_boolean installing "$([ -f /tmp/mixtile-update/install.pid ] && kill -0 "$(cat /tmp/mixtile-update/install.pid)" 2>/dev/null && echo 1 || echo 0)"
+	json_add_string install_log "$(tail -n 5 /tmp/mixtile-update/install.log 2>/dev/null)"
+	base=$(json_dump)
+	printf '%s, "updater": %s, "check": %s }\n' "${base%\}}" "$st" "$chk"
+}
+
+case "$1" in
+list)
+	cat <<-'EOF'
+	{
+		"topology": {},
+		"admin_get": {},
+		"admin_set": { "http_port": "80", "https_port": "443", "redirect_https": "0", "ssh_port": "22", "ssh_password": "1", "terminal_port": "7681", "console_port": "7682", "zones": [] },
+		"pending": {},
+		"password_state": {},
+		"confirm": { "token": "" },
+		"history_list": {},
+		"history_files": { "id": "" },
+		"history_file": { "id": "", "path": "" },
+		"history_snapshot": { "reason": "" },
+		"history_restore": { "id": "" },
+		"history_delete": { "id": "" },
+		"apply": {},
+		"tailscale_status": {},
+		"tailscale_up": { "authkey": "", "routes": "1", "ssh": "0" },
+		"tailscale_down": {},
+		"tailscale_logout": {},
+		"availability": { "hours": 24 },
+		"console_boots": { "node": 1 },
+		"console_read": { "node": 1, "name": "", "offset": 0, "length": 131072 },
+		"console_grep": { "node": 1, "boot": "", "pattern": "" },
+		"fw_status": {},
+		"info_get": {},
+		"info_set": { "info": "" },
+		"ovpn_list": {},
+		"pkg_list": {},
+		"pkg_search": { "q": "" },
+		"pkg_status": {},
+		"pkg_job": { "action": "install", "name": "" },
+		"ovpn_log": { "name": "" },
+		"ovpn_client_get": { "name": "" },
+		"ovpn_server_setup": { "port": "1194", "proto": "udp", "subnet": "10.8.0.0/24", "host": "" },
+		"ovpn_server_enable": { "enabled": "1" },
+		"ovpn_server_remove": {},
+		"ovpn_client_add": { "name": "" },
+		"ovpn_client_del": { "name": "" },
+		"ovpn_import": { "name": "", "config": "" },
+		"ovpn_enable": { "name": "", "enabled": "1" },
+		"ovpn_delete": { "name": "" },
+		"fw_check": {},
+		"fw_download": {},
+		"fw_install": {}
+	}
+	EOF
+	;;
+call)
+	read -r input
+	[ -n "$input" ] || input='{}'
+	json_load "$input"
+	case "$2" in
+	topology) topology ;;
+	admin_get) admin_get ;;
+	admin_set) admin_set ;;
+	pending) pending ;;
+	password_state) password_state ;;
+	confirm) confirm ;;
+	history_list) history_list ;;
+	history_files)
+		json_get_vars id
+		json_init
+		json_add_array files
+		"$HIST" files "$id" > "$RUN/files.$$" 2>/dev/null
+		while read -r f; do json_add_string "" "$f"; done < "$RUN/files.$$"
+		rm -f "$RUN/files.$$"
+		json_close_array
+		json_dump
+		;;
+	history_file) history_file ;;
+	history_snapshot)
+		json_get_vars reason
+		id=$("$HIST" snapshot "${reason:-manual}" 2>&1) && reply 0 "$id" || reply 1 "$id"
+		;;
+	history_restore)
+		json_get_vars id
+		"$HIST" files "$id" >/dev/null 2>&1 || { reply 2 "no snapshot $id"; exit 0; }
+		busy && { reply 3 "confirm the previous change first (or wait until it is rolled back)"; exit 0; }
+		snap=$("$HIST" snapshot "before restore of $id") || { reply 1 "snapshot failed"; exit 0; }
+		tok=$(arm "restore:$id" "$snap")
+		( sleep 2; "$HIST" restore-only "$id" ) </dev/null >/dev/null 2>&1 &
+		json_init
+		json_add_int code 0
+		json_add_string token "$tok"
+		json_add_int timeout "$GUARD"
+		json_add_string before "$snap"
+		json_dump
+		;;
+	history_delete)
+		json_get_vars id
+		out=$("$HIST" delete "$id" 2>&1) && reply 0 "deleted" || reply 2 "$out"
+		;;
+	apply)
+		( /usr/libexec/clusterbox/apply all ) </dev/null >/dev/null 2>&1 &
+		reply 0 "applying"
+		;;
+	tailscale_status) ts_status ;;
+	availability) availability ;;
+	console_boots) console_boots ;;
+	console_read) console_read ;;
+	console_grep) console_grep ;;
+	fw_status) fw_status ;;
+	info_get) info_get ;;
+	info_set) info_set ;;
+	ovpn_list) "$OVPN" list ;;
+	pkg_list) tool_text "$PKG" list ;;
+	pkg_search) json_get_vars q; tool_text "$PKG" search "$q" ;;
+	pkg_status) tool_text "$PKG" status ;;
+	pkg_job) json_get_vars action name; out=$("$PKG" job "$action" "$name" 2>&1) && reply 0 "$out" || reply 1 "$out" ;;
+	ovpn_log) json_get_vars name; ovpn_text log "$name" ;;
+	ovpn_client_get) json_get_vars name; ovpn_text client-get "$name" ;;
+	ovpn_client_add) json_get_vars name; ovpn_text client-add "$name" ;;
+	ovpn_client_del) json_get_vars name; ovpn_run client-del "$name" ;;
+	ovpn_server_setup) json_get_vars port proto subnet host; ovpn_run server-setup "$port" "$proto" "$subnet" "$host" ;;
+	ovpn_server_enable) json_get_vars enabled; ovpn_run server-enable "$enabled" ;;
+	ovpn_server_remove) ovpn_run server-remove ;;
+	ovpn_import)
+		json_get_vars name config
+		out=$(printf '%s\n' "$config" | "$OVPN" import "$name" 2>&1) && reply 0 "$out" || reply 1 "$out"
+		;;
+	ovpn_enable) json_get_vars name enabled; ovpn_run enable "$name" "$enabled" ;;
+	ovpn_delete) json_get_vars name; ovpn_run delete "$name" ;;
+	fw_check)
+		# Up to a minute with GitHub: longer than rpcd waits for a plugin.
+		( "$MU" check ) </dev/null >/dev/null 2>&1 &
+		reply 0 "checking"
+		;;
+	fw_download) "$MU" download --background ;;
+	fw_install)
+		out=$("$MU" verify 2>&1) || { printf '%s\n' "$out"; exit 0; }
+		"$MU" install --yes --background
+		;;
+	tailscale_up) ts_up ;;
+	tailscale_down)
+		out=$(tailscale down 2>&1) && reply 0 "down" || reply 1 "$out"
+		;;
+	tailscale_logout)
+		out=$(tailscale logout 2>&1) && reply 0 "logged out" || reply 1 "$out"
+		;;
+	*) reply 2 "unknown method" ;;
+	esac
+	;;
+esac

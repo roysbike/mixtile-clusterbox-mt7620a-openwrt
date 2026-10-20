@@ -8,6 +8,7 @@ boot() {
 	echo 1 > /sys/bus/pci/rescan
 	mount_root done
 	rm -f /sysupgrade.tgz && sync
+	rm -f /tmp/sysupgrade.tar && sync
 
 	# process user commands
 	[ -f /etc/rc.local ] && {

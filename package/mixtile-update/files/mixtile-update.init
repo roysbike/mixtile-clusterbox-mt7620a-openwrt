@@ -1,8 +1,22 @@
 #!/bin/sh /etc/rc.common
 # After an update: compare the running firmware with the one that was
-# installed and record the result (mixtile-update status shows it).
+# installed and record the result (mixtile-update status shows it). Then
+# keep checking for new releases in the background (auto_check).
 START=99
+USE_PROCD=1
 
 boot() {
 	/usr/libexec/mixtile-update post-boot >/dev/null 2>&1
+	start "$@"
+}
+
+start_service() {
+	procd_open_instance watch
+	procd_set_param command /usr/libexec/mixtile-update watch
+	procd_set_param respawn 3600 5 0
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger mixtile-update
 }

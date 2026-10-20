@@ -98,9 +98,7 @@ strings "$tun" | grep -q "^vermagic=$KERNEL_VERSION " || fail "tun.ko vermagic $
 file -b "$tun" | grep -q 'MIPS' || fail "tun.ko is not MIPS"
 grep -rqs '^tun' "$r/etc/modules.d/" || fail "tun not autoloaded"
 [ -z "$(find "$r" -name 'openmiop-ep.ko')" ] || fail "the blade (arm64) module must not be in the image"
-# Every kernel module in the image must be MIPS and built for this kernel
-# (kmods from this build, plus Mixtile's vendor miop.ko from upstream
-# custom-files, which openmiop does not use).
+# Every kernel module in the image must be MIPS and built for this kernel.
 for ko in $(find "$r/lib/modules" -name '*.ko'); do
 	file -b "$ko" | grep -q 'MIPS' || fail "${ko#$r} is not MIPS"
 	strings "$ko" | grep -q "^vermagic=$KERNEL_VERSION " || fail "${ko#$r}: $(strings "$ko" | grep '^vermagic=')"
@@ -109,13 +107,61 @@ ok "kmod-tun and all $(find "$r/lib/modules" -name '*.ko' | wc -l) modules: MIPS
 
 # nodectl
 for f in bin/nodectl usr/libexec/rpcd/nodectl www/luci-static/resources/view/nodectl/nodes.js \
-	www/luci-static/resources/view/nodectl/flash.js usr/share/luci/menu.d/luci-app-nodectl.json etc/config/nodectl; do
+	usr/share/luci/menu.d/luci-app-nodectl.json etc/config/nodectl; do
 	[ -e "$r/$f" ] || fail "/$f missing"
+done
+for f in usr/libexec/nodectl/flash www/luci-static/resources/view/nodectl/flash.js \
+	www/luci-static/resources/view/nodectl/rescue.js; do
+	[ -e "$r/$f" ] && fail "/$f is back (flashing and PXE were removed)"
 done
 file -b "$r/bin/nodectl" | grep -q MIPS || fail "nodectl is not MIPS"
 ok "nodectl + luci-app-nodectl"
 
-# updates
+# ClusterBox management backend, MoCI UI, VPN (Tailscale, OpenVPN, WireGuard)
+for f in usr/libexec/rpcd/clusterbox usr/libexec/clusterbox/apply usr/libexec/clusterbox/confhist \
+	usr/libexec/clusterbox/wanwatch usr/libexec/clusterbox/availwatch etc/init.d/clusterbox etc/config/clusterbox \
+	etc/uci-defaults/80-clusterbox-network etc/uci-defaults/81-clusterbox \
+	usr/share/rpcd/acl.d/clusterbox.json www/moci/index.html www/moci/js/core.js \
+	usr/libexec/rpcd/moci www/moci/js/addons/cluster/manifest.json www/moci/js/addons/cluster/addon.js \
+	www/cluster.html usr/sbin/tailscaled usr/sbin/openvpn usr/bin/wg; do
+	[ -e "$r/$f" ] || fail "/$f missing"
+done
+# Web files reach the browser with a version (moci-version); the firmware
+# watch of mixtile-update runs at boot.
+ls "$r"/etc/rc.d/S*moci-version >/dev/null 2>&1 || fail "moci-version is not enabled at boot"
+grep -q 'version.txt' "$r/www/moci/index.html" || fail "MoCI index.html does not load versioned files"
+# The ClusterBox page is the start page (MoCI patch 005, add-on nav
+# placement "home") and its backend has the cluster description.
+grep -q "placement === 'home'" "$r/www/moci/js/core.js" || fail "MoCI core.js has no home add-on page"
+grep -q '"placement": "home"' "$r/www/moci/js/addons/cluster/manifest.json" || fail "ClusterBox add-on is not the start page"
+grep -q 'info_get' "$r/usr/libexec/rpcd/clusterbox" && grep -q 'info_set' "$r/usr/share/rpcd/acl.d/clusterbox.json" ||
+	fail "clusterbox backend or ACL has no cluster description (info_get/info_set)"
+# NETWORK > TOPOLOGY and OPENVPN: the add-on's tabs, the OpenVPN backend
+# (server keys with openssl) and its ACL.
+grep -q "'network:tab'" "$r/www/moci/js/addons/cluster/addon.js" || fail "ClusterBox add-on has no network tabs"
+[ -x "$r/usr/libexec/clusterbox/ovpn" ] || fail "/usr/libexec/clusterbox/ovpn missing or not executable"
+[ -x "$r/usr/bin/openssl" ] || fail "openssl missing (OpenVPN server keys)"
+grep -q 'ovpn_server_setup' "$r/usr/share/rpcd/acl.d/clusterbox.json" || fail "ACL has no OpenVPN methods"
+grep -q '/etc/openvpn/cb/' "$r/lib/upgrade/keep.d/clusterbox" || fail "OpenVPN keys are not kept on upgrade"
+grep -q "wireguard '1'" "$r/etc/config/moci" || fail "MoCI WireGuard page is off"
+# MoCI patch 006: ClusterBox structure, firmware on the login page,
+# rc for STARTUP; the apk backend for SOFTWARE.
+grep -q 'id="login-fw"' "$r/www/moci/index.html" || fail "login page has no firmware line (patch 006)"
+grep -q '"rc": \["init"\]' "$r/usr/share/rpcd/acl.d/moci.json" || fail "MoCI ACL has no rc (STARTUP)"
+grep -q 'firmware_json' "$r/etc/init.d/moci-version" || fail "moci-version does not write firmware.json"
+[ -x "$r/usr/libexec/clusterbox/pkg" ] || fail "/usr/libexec/clusterbox/pkg missing or not executable"
+grep -q 'data-tab="wireless"' "$r/www/moci/index.html" && fail "Wi-Fi tab still in the web UI"
+grep -q 'watch) cmd_watch' "$r/usr/libexec/mixtile-update" || fail "mixtile-update has no background check"
+ls "$r"/etc/rc.d/S*mixtile-update >/dev/null 2>&1 || fail "mixtile-update is not enabled at boot"
+grep -q "config dhcp lan" "$r/etc/config/dhcp" && fail "dhcp defaults still have a lan section"
+sed -n '/^\tcluster-box-control-V120)/,/;;/p' "$r/etc/board.d/02_network" | grep -q ':lan"' &&
+	fail "switch defaults of the Cluster Box still have lan ports"
+ok "clusterbox backend, MoCI + ClusterBox add-on, tailscale, openvpn, wireguard; network defaults wan + openmiop"
+
+# updates; any upgrade prunes the eMMC overlay of the old firmware
+grep -q cluster_box_prune_overlay "$r/lib/upgrade/platform.sh" &&
+	grep -q '^cluster_box_prune_overlay()' "$r/lib/upgrade/cluster-box-overlay.sh" ||
+	fail "upgrade does not prune the overlay (lib/upgrade/cluster-box-overlay.sh)"
 for f in usr/libexec/mixtile-update etc/init.d/mixtile-update; do
 	[ -x "$r/$f" ] || fail "/$f missing"
 done
@@ -131,12 +177,23 @@ grep -q "option repository ''" "$r/etc/config/mixtile-update" || fail "mixtile-u
 grep -q 'api.github.com' "$r/etc/config/mixtile-update" || fail "mixtile-update api"
 ok "mixtile-update backend, LuCI Firmware Update page, source $REPOSITORY/releases, channel $UPDATE_CHANNEL"
 
-# LuCI version display
-grep -q '/etc/mixtile-release' "$r/usr/share/ucode/luci/dispatcher.uc" || fail "dispatcher does not read /etc/mixtile-release"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/sysauth.ut" || fail "login page lacks the version"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/openwrt2020/footer.ut" || fail "footer lacks the version"
-grep -q 'version.mixtile' "$r/usr/share/ucode/luci/template/themes/bootstrap/sysauth.ut" || fail "bootstrap login lacks the version"
-ok "LuCI login page, footer and overview read /etc/mixtile-release"
+# LuCI version display: the release description carries the firmware
+# version (CONFIG_VERSION_CODE), shown by LuCI in the footer and overview.
+grep -q "^DISTRIB_DESCRIPTION=.*ClusterBox $FIRMWARE_VERSION" "$r/etc/openwrt_release" ||
+	fail "/etc/openwrt_release: $(grep DISTRIB_DESCRIPTION "$r/etc/openwrt_release")"
+ok "LuCI shows $(sed -n 's/^DISTRIB_DESCRIPTION=//p' "$r/etc/openwrt_release")"
+
+# Board drivers and what was left out on purpose
+[ -n "$(find "$r/lib/modules/$KERNEL_VERSION" -name ch343.ko)" ] || fail "ch343.ko (blade consoles) missing"
+for f in etc/init.d/fan-boot usr/bin/picocom usr/bin/sshpass; do
+	[ -e "$r/$f" ] || fail "/$f missing"
+done
+for f in usr/sbin/hostapd usr/sbin/wpad usr/sbin/pppd; do
+	[ -e "$r/$f" ] && fail "/$f should not be in the image"
+done
+[ -z "$(find "$r/lib/modules" -name 'miop.ko' -o -name 'mac80211.ko' -o -name 'cfg80211.ko')" ] ||
+	fail "vendor miop.ko or Wi-Fi modules in the image"
+ok "ch343, fan-boot, picocom, sshpass; no Wi-Fi, PPP or vendor miop.ko"
 
 [ "$failed" = 0 ] || die "firmware verification failed"
 echo "firmware verified: $(basename "$image")"

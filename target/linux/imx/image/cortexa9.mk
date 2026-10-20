@@ -19,8 +19,8 @@ define Build/boot-overlay
 	)
 	mkimage -A arm -O linux -T script -C none -a 0 -e 0 \
 		-n '$(DEVICE_ID) OpenWrt bootscript' \
-		-d ./bootscript-$(DEVICE_NAME) \
-		$@.boot/6x_bootscript-$(DEVICE_NAME)
+		-d ./bootscript-$(if $(BOARD_NAME),$(BOARD_NAME),$(DEVICE_NAME)) \
+		$@.boot/6x_bootscript-$(if $(BOARD_NAME),$(BOARD_NAME),$(DEVICE_NAME))
 
 	$(STAGING_DIR_HOST)/bin/mkfs.ubifs \
 		--space-fixup --compr=zlib --squash-uids \
@@ -43,7 +43,7 @@ endef
 define Build/recovery-scr
 	mkimage -A arm -O linux -T script -C none -a 0 -e 0 \
 	-n '$(DEVICE_ID) OpenWrt recovery bootscript' \
-	-d ./recovery-$(DEVICE_NAME) $@
+	-d ./recovery-$(if $(BOARD_NAME),$(BOARD_NAME),$(DEVICE_NAME)) $@
 endef
 
 define Build/apalis-emmc
@@ -63,7 +63,7 @@ define Build/ventana-img
 	)
 	mkimage -A arm -O linux -T script -C none -a 0 -e 0 \
 		-n '$(DEVICE_ID) OpenWrt bootscript' \
-		-d bootscript-$(DEVICE_NAME) \
+		-d bootscript-$(if $(BOARD_NAME),$(BOARD_NAME),$(DEVICE_NAME)) \
 		$@.boot/boot/6x_bootscript-ventana
 	cp $@ $@.fs
 
@@ -84,6 +84,7 @@ define Device/Default
   KERNEL_NAME := zImage
   KERNEL := kernel-bin | uImage none
   KERNEL_LOADADDR := 0x10008000
+  DTS_DIR := $(DTS_DIR)/nxp/imx
   IMAGES :=
 endef
 
@@ -91,7 +92,7 @@ define Device/gateworks_ventana
   DEVICE_VENDOR := Gateworks
   DEVICE_MODEL := Ventana family
   DEVICE_VARIANT := normal NAND flash
-  DEVICE_NAME := ventana
+  BOARD_NAME := ventana
   DEVICE_DTS:= \
 	imx6dl-gw51xx \
 	imx6dl-gw52xx \
@@ -120,7 +121,8 @@ define Device/gateworks_ventana
 	imx6q-gw5913
   DEVICE_PACKAGES := kmod-sky2 kmod-sound-core kmod-sound-soc-imx \
 	kmod-sound-soc-imx-sgtl5000 kmod-can kmod-can-flexcan kmod-can-raw \
-	kmod-hwmon-gsc kmod-leds-gpio kmod-pps-gpio kobs-ng
+	kmod-hwmon-gsc kmod-leds-gpio kmod-pps-gpio kobs-ng \
+	kmod-gpio-button-hotplug
   KERNEL += | boot-overlay
   IMAGES := img.gz nand.ubi bootfs.tar.gz dtb
   IMAGE/nand.ubi := append-ubi

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nodectl
 PKG_VERSION:=2.0
-PKG_RELEASE:=3
+PKG_RELEASE:=6
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -15,7 +15,7 @@ endef
 
 define Package/nodectl/description
 	Power, reset, graceful shutdown, status, serial/SSH console and
-	OS image flashing for the Blade3 nodes of a Mixtile ClusterBox.
+	fan control for the Blade3 nodes of a Mixtile ClusterBox.
 endef
 
 define Package/nodectl/conffiles
@@ -36,8 +36,6 @@ endef
 define Package/nodectl/install
 	$(INSTALL_DIR) $(1)/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/nodectl $(1)/bin/
-	$(INSTALL_DIR) $(1)/usr/libexec/nodectl
-	$(INSTALL_BIN) ./files/flash.sh $(1)/usr/libexec/nodectl/flash
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/nodectl.config $(1)/etc/config/nodectl
 	$(INSTALL_DIR) $(1)/etc/init.d

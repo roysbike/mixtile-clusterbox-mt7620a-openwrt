@@ -1,0 +1,86 @@
+#!/bin/sh
+# Packages (apk) for the web UI (SYSTEM > SOFTWARE, rpcd clusterbox pkg_*).
+#
+#   pkg list                 installed packages (apk list -I)
+#   pkg search TEXT          packages in the feeds whose name contains TEXT
+#   pkg job update|install NAME|remove NAME
+#                            runs in the background (feeds take a while
+#                            over the BMC's uplink); progress with "status"
+#   pkg status               state (idle/running/done/failed), action, log
+#
+# Packages the BMC or this web UI cannot run without are not removed.
+
+RUN=/var/run/clusterbox
+STATE=$RUN/pkg.state
+LOG=$RUN/pkg.log
+KEEP=' apk-mbedtls apk-openssl base-files busybox clusterbox dropbear fstools kernel kmod-omi-rc libc moci moci-app-clusterbox mixtile-release mixtile-update netifd nodectl openmiop procd rpcd rpcd-mod-file ubox ubus uci uhttpd '
+
+mkdir -p "$RUN"
+
+die() { echo "$*" >&2; exit 1; }
+
+valid_pkg() {
+	echo "$1" | grep -qE '^[a-z0-9][a-z0-9+._-]{0,63}$'
+}
+
+# A job runs while its state says so and its process lives (pid 0: just
+# started, the pid is written a moment later).
+busy() {
+	local pid
+	[ -f "$STATE" ] && [ "$(cut -d' ' -f1 "$STATE")" = running ] || return 1
+	pid=$(cut -d' ' -f4 "$STATE")
+	[ "$pid" = 0 ] || kill -0 "$pid" 2>/dev/null
+}
+
+case "$1" in
+list)
+	apk list -I 2>/dev/null
+	;;
+search)
+	q=$2
+	echo "$q" | grep -qE '^[A-Za-z0-9+._-]{2,40}$' || die "search: 2-40 letters, digits or + . _ -"
+	apk list --available "*$q*" 2>/dev/null | head -n 200
+	;;
+job)
+	action=$2 name=$3
+	case "$action" in
+	update) name=- ;;
+	install|remove)
+		valid_pkg "$name" || die "invalid package name"
+		[ "$action" = remove ] && case "$KEEP" in *" $name "*) die "$name is needed by the BMC and cannot be removed here" ;; esac
+		;;
+	*) die "job: update, install or remove" ;;
+	esac
+	busy && die "another package job is running"
+	echo "running $action $name 0" > "$STATE"
+	echo "# $(date '+%F %T') apk $action $([ "$name" = - ] || echo "$name")" > "$LOG"
+	(
+		case "$action" in
+		update) apk update >> "$LOG" 2>&1 ;;
+		install) apk add "$name" >> "$LOG" 2>&1 ;;
+		remove) apk del "$name" >> "$LOG" 2>&1 ;;
+		esac
+		rc=$?
+		[ $rc = 0 ] && st=done || st=failed
+		echo "$st $action $name $rc" > "$STATE"
+		# A new web add-on or web files: the browser picks them up.
+		/etc/init.d/moci-version start >/dev/null 2>&1
+	) </dev/null >/dev/null 2>&1 &
+	pid=$!
+	# Unless the job has already finished.
+	sed -i "s/^running \(.*\) 0$/running \1 $pid/" "$STATE"
+	echo "started"
+	;;
+status)
+	if [ -f "$STATE" ]; then
+		set -- $(cat "$STATE")
+		st=$1
+		[ "$st" = running ] && ! busy && st=failed
+		echo "$st $2 $3"
+	else
+		echo "idle - -"
+	fi
+	[ -f "$LOG" ] && tail -n 80 "$LOG"
+	;;
+*) die "usage: pkg list|search TEXT|job ACTION [NAME]|status" ;;
+esac
