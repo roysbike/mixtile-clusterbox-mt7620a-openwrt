@@ -38,7 +38,7 @@ bottom with their state, 24 h availability and CONSOLE, LOGS and POWER),
 health and traffic beside it.*
 
 Current release: **v0.4.0** (OpenWrt 25.12.6, Linux 6.12; OpenMIOP Stack
-v0.6.0) — [release notes](release-notes/v0.4.0.md),
+v0.6.0 and v0.6.1) — [release notes](release-notes/v0.4.0.md),
 [CHANGELOG.md](CHANGELOG.md),
 [release page](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0).
 The previous release v0.3.0 is on OpenWrt 23.05.
@@ -91,12 +91,12 @@ single Blade 3) and want:
   slot 1    slot 2    slot 3    slot 4    Blade 3 (RK3588), omi0 10.20.0.x
 ```
 
-| OpenMIOP Stack v0.6.0 | |
+| OpenMIOP Stack v0.6.1 | |
 | --- | --- |
 | Protocol | OpenMIOP v4 between blades (per-connection doorbell, multiqueue, checksum offload), push mode, gateway pull and zero-copy to the BMC |
-| Blade driver, BMC module | [pcie-ep-net v0.6.0](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.0) (`omi-rc` as in v0.5.2) |
-| Blade OS | [mixtile-talos v0.6.0](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.0) |
-| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.4.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0) (this repository) |
+| Blade driver, BMC module | [pcie-ep-net v0.6.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.1) (drivers as v0.6.0, `omi-rc` as in v0.5.2, plus the Blade 3 board modules) |
+| Blade OS | [mixtile-talos v0.6.1](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.1) (Talos v1.14.4) |
+| ClusterBox BMC | [mixtile-clusterbox-mt7620a-openwrt v0.4.0](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0) (this repository; the same BMC firmware for Stack v0.6.0 and v0.6.1) |
 
 The blades run the endpoint driver (`openmiop-ep.ko`, ARM64; not part of this
 firmware). The BMC runs the `omi-rc` kernel module (push mode: the blades
