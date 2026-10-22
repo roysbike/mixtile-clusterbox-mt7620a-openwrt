@@ -319,13 +319,21 @@ struct link_info {
 
 /*
  * Negotiated speed and width of the node's link, from the switch port's
- * Link Status, and what both ends support (the lower of the port's and,
- * when it is enumerated, the endpoint's Link Capabilities): a Blade 3
- * has two lanes behind a four-lane switch port.
+ * Link Status, and what both ends support: the lower of the port's Link
+ * Capabilities and the node's (ep_max_gen/ep_max_width, default Gen3 x2
+ * of a Blade 3 behind a four-lane switch port).
+ *
+ * Only the switch port is read, never the endpoint: a config read of an
+ * endpoint whose link drops while the read is in flight ends in a
+ * completion timeout that wedges the MT7620A root complex (all blades
+ * lose the BMC until it reboots). The link can drop at any time (blade
+ * reboot, crash), and status runs every minute from nodectl-metrics.
  */
 static void node_link_info(int n, struct link_info *li)
 {
-	unsigned int cap, sta, ecap, esta;
+	unsigned int cap, sta;
+	int ep_gen = cfg_int("global", "ep_max_gen", 3);
+	int ep_width = cfg_int("global", "ep_max_width", 2);
 	char dev[16];
 
 	memset(li, 0, sizeof(*li));
@@ -336,13 +344,10 @@ static void node_link_info(int n, struct link_info *li)
 	li->width = (sta >> 4) & 0x3f;
 	li->max_gen = cap & 0xf;
 	li->max_width = (cap >> 4) & 0x3f;
-	snprintf(dev, sizeof(dev), "0000:%02x:00.0", PCI_BUS[n - 1]);
-	if (!pcie_link_regs(dev, &ecap, &esta)) {
-		if ((int)(ecap & 0xf) < li->max_gen)
-			li->max_gen = ecap & 0xf;
-		if ((int)((ecap >> 4) & 0x3f) < li->max_width)
-			li->max_width = (ecap >> 4) & 0x3f;
-	}
+	if (ep_gen > 0 && ep_gen < li->max_gen)
+		li->max_gen = ep_gen;
+	if (ep_width > 0 && ep_width < li->max_width)
+		li->max_width = ep_width;
 }
 
 static void link_text(const struct link_info *li, char *buf, size_t len)
@@ -933,14 +938,39 @@ static int cmd_status(struct opts *o)
 	return EXIT_OK;
 }
 
+/*
+ * The node PCIe devices, from the IDs the kernel cached at enumeration
+ * (sysfs vendor/device/class). Not lspci: it reads every endpoint's config
+ * space, which wedges the root complex when a link drops meanwhile (see
+ * node_link_info()).
+ */
 static int cmd_list(void)
 {
-	char cmd[] = "lspci | grep -E '^0[3-6]:'";
-	int ret;
+	char path[64], ven[16], dev[16], cls[16];
+	int n, found = 0;
 
-	puts("If no device is found, run 'nodectl rescan' and then 'nodectl list'.");
-	ret = system(cmd);
-	return ret == 0 ? EXIT_OK : EXIT_FAIL;
+	for (n = 1; n <= NODES; n++) {
+		snprintf(path, sizeof(path), "/sys/bus/pci/devices/0000:%02x:00.0/vendor",
+			 PCI_BUS[n - 1]);
+		if (read_file(path, ven, sizeof(ven)))
+			continue;
+		snprintf(path, sizeof(path), "/sys/bus/pci/devices/0000:%02x:00.0/device",
+			 PCI_BUS[n - 1]);
+		if (read_file(path, dev, sizeof(dev)))
+			dev[0] = 0;
+		snprintf(path, sizeof(path), "/sys/bus/pci/devices/0000:%02x:00.0/class",
+			 PCI_BUS[n - 1]);
+		if (read_file(path, cls, sizeof(cls)))
+			cls[0] = 0;
+		printf("node %d  %02x:00.0  %s:%s  class %s\n", n, PCI_BUS[n - 1],
+		       ven[0] == '0' && ven[1] == 'x' ? ven + 2 : ven,
+		       dev[0] == '0' && dev[1] == 'x' ? dev + 2 : dev,
+		       cls[0] ? cls : "?");
+		found++;
+	}
+	if (!found)
+		puts("No node device found: run 'nodectl rescan' and then 'nodectl list'.");
+	return found ? EXIT_OK : EXIT_FAIL;
 }
 
 static int cmd_rescan(void)
