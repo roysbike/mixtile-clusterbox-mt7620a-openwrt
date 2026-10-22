@@ -38,7 +38,8 @@ controller, MediaTek MT7620A), — это собственный маленьк�
 рядом здоровье и трафик.*
 
 Текущий релиз: **v0.4.0** (OpenWrt 25.12.6, Linux 6.12; OpenMIOP Stack
-v0.6.0) — [release notes](release-notes/v0.4.0.md),
+v0.6.0 и v0.6.1: блейды на mixtile-talos v0.6.1 / Talos v1.14.4 работают
+с той же прошивкой) — [release notes](release-notes/v0.4.0.md),
 [CHANGELOG.md](CHANGELOG.md),
 [страница релиза](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.0).
 Предыдущий релиз v0.3.0 — на OpenWrt 23.05.
