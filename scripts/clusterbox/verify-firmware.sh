@@ -115,6 +115,10 @@ for f in usr/libexec/nodectl/flash www/luci-static/resources/view/nodectl/flash.
 	[ -e "$r/$f" ] && fail "/$f is back (flashing and PXE were removed)"
 done
 file -b "$r/bin/nodectl" | grep -q MIPS || fail "nodectl is not MIPS"
+# nodectl must not read blade config space (a read in flight when a blade
+# link drops wedges the MT7620A root complex): no lspci, ep_max_* options
+strings "$r/bin/nodectl" | grep -q lspci && fail "nodectl runs lspci (reads blade config space)"
+strings "$r/bin/nodectl" | grep -q '^ep_max_width$' || fail "nodectl older than 2.0-7 (reads blade config space)"
 ok "nodectl + luci-app-nodectl"
 
 # ClusterBox management backend, MoCI UI, VPN (Tailscale, OpenVPN, WireGuard)
