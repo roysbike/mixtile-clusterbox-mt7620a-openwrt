@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-22
+
+A fix release on v0.4.0 (OpenWrt 25.12.6, `omi-rc` from pcie-ep-net
+v0.6.0 unchanged): nodectl can no longer wedge the PCIe fabric.
+
 ### Added
 - LuCI: menu entry **ClusterBox UI** (next to Logout) that opens the main
   web UI (MoCI, `/moci/`); MoCI has its own session and may ask to log in.
