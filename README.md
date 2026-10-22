@@ -332,7 +332,7 @@ the terminal to 115200 if the output turns to garbage after U-Boot:
 cat /etc/mixtile-release
 dmesg | grep omi0                                 # "push mode", "node N active ... gateway pull, zero-copy"
 nodectl status --all                              # every blade powered, LINK Gen3 x2
-lspci -d 1d87:4f4d -vv | grep -E 'LnkSta|Region 0'
+lspci -d 1d87:4f4d -vv | grep -E 'LnkSta|Region 0'   # reads the blades: never while one reboots
 ip addr show omi0                                 # 10.20.0.1/24, mtu 9000
 ping -c3 10.20.0.<blade>
 ```

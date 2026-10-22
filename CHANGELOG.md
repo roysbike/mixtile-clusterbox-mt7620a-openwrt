@@ -14,6 +14,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   drives the OCuLink lane-0 mux. Only reads are meant: a write to the
   wrong register can stop the PCIe root complex and with it the fabric.
 
+### Fixed
+- nodectl no longer reads the blades' PCIe config space. `status` read
+  each endpoint's Link Capabilities and `list` ran `lspci`; a blade link
+  that dropped during such a read (blade reboot, crash) left it in flight
+  and the MT7620A completion timeout wedged the root complex: every blade
+  lost the BMC until a BMC reboot (seen 2026-10-22 on a `talosctl reboot`,
+  with `nodectl status` polled; `nodectl-metrics` runs it every minute).
+  `status` now reads only the switch port and takes the blade's link
+  capabilities from the new options `ep_max_gen`/`ep_max_width` (default
+  Gen3 x2); `list` prints the IDs the kernel cached at enumeration.
+- `/etc/config/nodectl`: the console archive options were listed twice.
+
 ## [0.4.0] - 2026-10-20
 
 The firmware on OpenWrt 25.12.6 (Linux 6.12.112) with a new web UI, the
