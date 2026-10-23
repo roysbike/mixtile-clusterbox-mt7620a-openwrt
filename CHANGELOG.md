@@ -31,6 +31,14 @@ v0.6.0 unchanged): nodectl can no longer wedge the PCIe fabric.
   Gen3 x2); `list` prints the IDs the kernel cached at enumeration.
 - `/etc/config/nodectl`: the console archive options were listed twice.
 
+### Tested
+
+- Update from v0.4.0 on the lab box, configuration kept: all blades back
+  at Gen3 x2, no database failover, DRBD and ZFS clean.
+- A blade `talosctl reboot` while `nodectl status` ran every second (and
+  `status --all` every 5 s, `nodectl-metrics`): no wedge, the blade
+  rejoined and was Ready 56 s after the command.
+
 ## [0.4.0] - 2026-10-20
 
 The firmware on OpenWrt 25.12.6 (Linux 6.12.112) with a new web UI, the
