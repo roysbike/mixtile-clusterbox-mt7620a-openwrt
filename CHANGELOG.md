@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-26
+
+v0.4.1 with the newest packages of OpenWrt 25.12 (v25.12.6 is still the
+newest 25.12 release). `omi-rc` from pcie-ep-net v0.6.0 unchanged.
+
+### Changed
+- `ca-certificates`: "emSign ECC Root CA - G3" blacklisted (it issued
+  eMudhra intermediates with 8-bit keys); cherry-picked from
+  `openwrt-25.12` (4a686570eb).
+- packages feed at the head of `openwrt-25.12` (772e091b09, 2026-10-26)
+  instead of the v25.12.6 pin; in the image only `luasocket` changes
+  (release 3, Lua 5.4 variant added). luci unchanged (pin = branch head).
+
+### Fixed
+- Build: `luci-app-weechat` is removed after `feeds install -a`; with the
+  new packages feed it formed a recursive Kconfig dependency and
+  `make defconfig` dropped packages of the image.
+
 ## [0.4.1] - 2026-10-22
 
 A fix release on v0.4.0 (OpenWrt 25.12.6, `omi-rc` from pcie-ep-net

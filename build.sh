@@ -24,6 +24,11 @@ function feeds_install()
 	echo "============Start feeds install ============"
 	echo "=========================================="
 	./scripts/feeds install -a
+	# luci-app-weechat (luci at v25.12.6) and weechat of the packages
+	# feed after openwrt/packages 9edff735c form a recursive Kconfig
+	# dependency, and defconfig then drops packages of the image. The
+	# image has no weechat: keep the app out of the tree.
+	./scripts/feeds uninstall luci-app-weechat
 }
 
 function choose_target_board()
