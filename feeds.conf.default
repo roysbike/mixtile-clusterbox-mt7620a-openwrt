@@ -1,3 +1,5 @@
-# Feeds pinned by the OpenWrt v25.12.6 tag; only the ones the Cluster Box uses.
-src-git packages https://git.openwrt.org/feed/packages.git^093d551675b1119a06ef224d419905e8d6b2af1a
+# Feeds of OpenWrt 25.12; only the ones the Cluster Box uses. packages: head
+# of the openwrt-25.12 branch on 2026-10-26 (v25.12.6 tag + 42 commits);
+# luci: v25.12.6 tag pin, equal to the branch head on that day.
+src-git packages https://git.openwrt.org/feed/packages.git^772e091b09ba9443532d221f729c8213ad3d06e1
 src-git luci https://git.openwrt.org/project/luci.git^75a306df84a020c57a631ef5b4c02ace56d93387
