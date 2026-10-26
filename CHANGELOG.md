@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Web UI firmware update: **UPDATE** failed with `clusterbox.fw_install:
+  ubus status 5` and installed nothing. The call verified the image
+  twice (SHA-256 over 26 MB, `fwtool`, `sysupgrade -T`; ~30 s each on an
+  idle BMC, 41 s with the CPU busy) inside one rpcd call, and rpcd stops
+  a plugin after 30 s. `mixtile-update verify --background` (new) and
+  `install --background` now return at once and run detached;
+  `mixtile-update status` reports `verify` and `install` (`running`,
+  `done`, `failed` with `verify_error`/`install_error`), and the web UI
+  polls them (new rpcd method `fw_verify`). The LuCI page *Firmware
+  Update* (`Download & verify`) had the same limit and uses the same
+  detached verify. The fix works from the
+  release that ships it on: updating from v0.4.2 or older still runs the
+  old web UI, so install over SSH (see the v0.4.2 release notes).
+
 ## [0.4.2] - 2026-10-26
 
 v0.4.1 with the newest packages of OpenWrt 25.12 (v25.12.6 is still the
