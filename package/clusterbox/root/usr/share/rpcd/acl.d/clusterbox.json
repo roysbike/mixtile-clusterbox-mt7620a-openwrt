@@ -63,6 +63,7 @@
 					"tailscale_logout",
 					"fw_check",
 					"fw_download",
+					"fw_verify",
 					"fw_install",
 						"info_set",
 						"ovpn_server_setup",

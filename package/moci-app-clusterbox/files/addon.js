@@ -1667,11 +1667,23 @@ export default class ClusterBoxAddon {
 				if (st.download === 'failed' || (st.download === 'none' && n > 4)) throw new Error(st.download_error || 'download failed');
 			}
 			step('download', 'done');
+			// Verify and install run detached on the BMC: one SHA-256 of
+			// the image can take longer than rpcd waits for a call.
 			step('verify', 'active');
-			r = await this.call('fw_install', {}, 'clusterbox', 120000);
+			r = await this.call('fw_verify', {}, 'clusterbox', 30000);
 			if (r.status === 'error') throw new Error(r.message);
+			for (let n = 0; ; n++) {
+				await sleep(2000);
+				const st = (await this.fwLoad())?.updater || {};
+				if (st.verify === 'done') break;
+				if (st.verify === 'failed') throw new Error(st.verify_error || 'verification failed');
+				if (st.verify === 'none' && n > 4) throw new Error('verification did not start');
+				if (n > 450) throw new Error('verification did not finish within 15 minutes');
+			}
 			step('verify', 'done');
 			step('install', 'active');
+			r = await this.call('fw_install', {}, 'clusterbox', 30000);
+			if (r.status === 'error') throw new Error(r.message);
 		} catch (e) {
 			return fail(e.message);
 		}
@@ -1687,6 +1699,12 @@ export default class ClusterBoxAddon {
 			try {
 				ok = (await fetch('/moci/version.txt', { cache: 'no-store' })).ok;
 			} catch {}
+			// Until the BMC goes away the install repeats every check;
+			// a failure there leaves the BMC up.
+			if (ok && !down) {
+				const st = (await this.fwLoad())?.updater || {};
+				if (st.install === 'failed') return fail(st.install_error || 'install failed');
+			}
 			if (!ok && !down) {
 				down = true;
 				step('install', 'done');

@@ -635,6 +635,7 @@ list)
 		"ovpn_delete": { "name": "" },
 		"fw_check": {},
 		"fw_download": {},
+		"fw_verify": {},
 		"fw_install": {}
 	}
 	EOF
@@ -720,10 +721,10 @@ call)
 		reply 0 "checking"
 		;;
 	fw_download) "$MU" download --background ;;
-	fw_install)
-		out=$("$MU" verify 2>&1) || { printf '%s\n' "$out"; exit 0; }
-		"$MU" install --yes --background
-		;;
+	# Both run detached (one SHA-256 of the image can take longer than
+	# rpcd waits for a plugin); fw_status reports the result.
+	fw_verify) "$MU" verify --background ;;
+	fw_install) "$MU" install --yes --background ;;
 	tailscale_up) ts_up ;;
 	tailscale_down)
 		out=$(tailscale down 2>&1) && reply 0 "down" || reply 1 "$out"
