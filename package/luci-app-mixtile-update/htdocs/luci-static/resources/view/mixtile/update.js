@@ -194,14 +194,35 @@ return view.extend({
 							return;
 						}
 
+						// Detached: one verification can take longer than
+						// rpcd waits for fs.exec (30 s).
 						bar.firstChild.data = _('Verifying board, version, OpenMIOP protocol and SHA-256…');
-						run([ 'verify' ]).then(L.bind(function(v) {
-							ui.hideModal();
-							if (v.status == 'verified')
-								ui.addNotification(null, E('p', _('Firmware %s downloaded and verified (SHA-256 %s).').format(v.version, v.sha256)), 'info');
+						run([ 'verify', '--background' ]).then(L.bind(function(v) {
+							var n = 0;
+							var done = L.bind(function(ok, msg) {
+								ui.hideModal();
+								if (ok)
+									ui.addNotification(null, E('p', _('Firmware %s downloaded and verified (SHA-256 %s).').format(st.latest_version, msg)), 'info');
+								else
+									ui.addNotification(null, E('p', _('Verification failed: %s').format(msg)), 'danger');
+								resolve(this.refresh());
+							}, this);
+							var poll = function() {
+								run([ 'status' ]).then(function(vs) {
+									if (vs.verify == 'done')
+										done(true, vs.verified_sha256);
+									else if (vs.verify == 'failed')
+										done(false, vs.verify_error || _('unknown error'));
+									else if (vs.verify == 'none' && ++n > 4)
+										done(false, _('verification did not start'));
+									else
+										window.setTimeout(poll, 2000);
+								});
+							};
+							if (v.status == 'error')
+								done(false, v.message);
 							else
-								ui.addNotification(null, E('p', _('Verification failed: %s').format(v.message)), 'danger');
-							resolve(this.refresh());
+								window.setTimeout(poll, 2000);
 						}, this));
 					}, this));
 				}, this);
@@ -229,6 +250,19 @@ return view.extend({
 				ui.showModal(_('Installing…'), [
 					E('p', { 'class': 'spinning' }, _('The firmware is being written. The ClusterBox reboots when done. Do not power it off. The blades keep running.'))
 				]);
+				// The detached install checks the image again first; a
+				// failure there leaves the BMC running.
+				var poll = function() {
+					run([ 'status' ]).then(function(s) {
+						if (s.install == 'failed') {
+							ui.hideModal();
+							ui.addNotification(null, E('p', _('Install refused: %s').format(s.install_error || _('unknown error'))), 'danger');
+						} else if (s.install == 'running') {
+							window.setTimeout(poll, 3000);
+						}
+					}).catch(function() {});
+				};
+				window.setTimeout(poll, 3000);
 				ui.awaitReconnect(window.location.host);
 			});
 		}));

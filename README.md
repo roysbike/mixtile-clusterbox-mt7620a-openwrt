@@ -274,12 +274,18 @@ mixtile-update check                 # newest release on the channel
 mixtile-update download
 mixtile-update verify                # board, target, version, OpenMIOP protocol, SHA-256
 mixtile-update install --yes         # prunes the overlay, then sysupgrade
+                                     # --background: detached, log in /tmp/mixtile-update/install.log
 ```
 
 * Source: the GitHub Releases of the repository in `/etc/mixtile-release`
   (this one); override with `uci set mixtile-update.main.repository=<owner/repo>`.
 * Channels: `rc` (release candidates and final releases) and `stable`
   (final only): `uci set mixtile-update.main.channel=stable; uci commit mixtile-update`.
+* **UPDATE in the web UI of v0.4.1/v0.4.2 can fail** with
+  `clusterbox.fw_install: ubus status 5` (it verifies for longer than
+  rpcd waits); install over SSH then: `mixtile-update install --yes
+  --background` (log in `/tmp/mixtile-update/install.log`). Fixed in the
+  web UI of the next release.
 * Nothing is installed automatically. Downgrades and reinstalls need
   `--allow-downgrade`; a release with a different OpenMIOP protocol needs
   `--allow-protocol-change` (upgrade the blades to match). Development

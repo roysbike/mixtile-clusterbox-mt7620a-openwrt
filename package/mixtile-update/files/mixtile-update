@@ -4,7 +4,7 @@
 #   mixtile-update status
 #   mixtile-update check [--channel rc|stable]
 #   mixtile-update download [--background]
-#   mixtile-update verify [--allow-downgrade] [--allow-protocol-change]
+#   mixtile-update verify [--background] [--allow-downgrade] [--allow-protocol-change]
 #   mixtile-update install --yes [--background] [--allow-downgrade] [--allow-protocol-change]
 #   mixtile-update verify-local IMAGE
 #   mixtile-update install-local --yes IMAGE [--allow-downgrade] [--allow-protocol-change]
@@ -16,6 +16,11 @@
 #
 # Every command prints one JSON object. Nothing is installed without
 # "install --yes", and install repeats every check of "verify".
+#
+# --background (download, verify, install) returns at once and leaves the
+# work to a detached process; "status" reports how it went. The web UI
+# uses it: rpcd gives a plugin 30 s, and on a busy BMC (all CPU in the
+# kernel while the PCIe fabric hangs) one SHA-256 of the image took 41 s.
 #
 # install-local installs an image downloaded by hand, with SHA256SUMS and
 # clusterbox-firmware.json from the same release next to it. It also
@@ -44,6 +49,7 @@ SIG=$WORK/SHA256SUMS.sig
 MANIFEST=$WORK/clusterbox-firmware.json
 VERIFIED=$WORK/verified
 DLLOG=$WORK/download.log
+VERLOG=$WORK/verify.log
 INSTLOG=$WORK/install.log
 LOCK=/var/lock/mixtile-update.lock
 SELF=/usr/libexec/mixtile-update
@@ -277,6 +283,25 @@ prune_overlay() {
 	return 0
 }
 
+# bg_state NAME LOG [DONE]: field NAME = running (NAME.pid alive), DONE
+# when given, failed (last line of LOG is an error; NAME_error = its
+# message) or none.
+bg_state() {
+	local st=none last
+	if [ -f "$WORK/$1.pid" ] && kill -0 "$(cat "$WORK/$1.pid")" 2>/dev/null; then
+		st=running
+	elif [ -n "$3" ]; then
+		st=$3
+	elif [ -s "$2" ]; then
+		last=$(tail -n1 "$2")
+		if [ "$(jsonfilter -s "$last" -e @.status 2>/dev/null)" = error ]; then
+			st=failed
+			json_add_string "$1_error" "$(jsonfilter -s "$last" -e @.message 2>/dev/null)"
+		fi
+	fi
+	json_add_string "$1" "$st"
+}
+
 # ---- commands --------------------------------------------------------------
 
 cmd_status() {
@@ -310,6 +335,8 @@ cmd_status() {
 	json_add_int downloaded_bytes "${size:-0}"
 	[ "$dl" = failed ] && json_add_string download_error "$(tail -n1 "$DLLOG")"
 	[ -s "$VERIFIED" ] && [ -s "$IMAGE" ] && json_add_string verified_sha256 "$(cat "$VERIFIED")"
+	bg_state verify "$VERLOG" "$([ -s "$VERIFIED" ] && [ -s "$IMAGE" ] && echo done)"
+	bg_state install "$INSTLOG"
 	[ -s "$STATE_DIR/pending" ] && json_add_string pending_install "$(cat "$STATE_DIR/pending")"
 	if [ -s "$STATE_DIR/last-install" ]; then
 		v=$(cat "$STATE_DIR/last-install")
@@ -422,7 +449,7 @@ cmd_download() {
 	fi
 
 	lock
-	rm -f "$IMAGE" "$VERIFIED" "$WORK/image.version"
+	rm -f "$IMAGE" "$VERIFIED" "$VERLOG" "$WORK/image.version"
 	echo "downloading $url" > "$DLLOG"
 	if ! uclient-fetch -q -T 120 -O "$IMAGE.tmp" "$url" >/dev/null 2>&1; then
 		rm -f "$IMAGE.tmp"
@@ -441,6 +468,16 @@ cmd_download() {
 
 cmd_verify() {
 	local out
+	if [ "$BACKGROUND" = 1 ]; then
+		[ -f "$WORK/verify.pid" ] && kill -0 "$(cat "$WORK/verify.pid")" 2>/dev/null &&
+			fail "verify is already running"
+		rm -f "$VERIFIED"
+		: > "$VERLOG"
+		start-stop-daemon -S -b -m -p "$WORK/verify.pid" -x /bin/sh -- \
+			-c "exec $SELF verify $(bg_args) >>$VERLOG 2>&1"
+		json_init; json_add_string status verifying; json_dump
+		return 0
+	fi
 	lock
 	rm -f "$VERIFIED"
 	out=$(check_image) || fail "$out"
@@ -454,19 +491,24 @@ cmd_verify() {
 	json_dump
 }
 
+# Options a detached verify/install passes on.
+bg_args() {
+	[ "$ALLOW_DOWNGRADE" = 1 ] && printf ' --allow-downgrade'
+	[ "$ALLOW_PROTO" = 1 ] && printf ' --allow-protocol-change'
+	:
+}
+
 cmd_install() {
-	local out args=
+	local out
 	[ "$YES" = 1 ] || fail "install needs --yes"
 	[ -s "$VERIFIED" ] || fail "run verify first"
 
 	if [ "$BACKGROUND" = 1 ]; then
-		[ "$ALLOW_DOWNGRADE" = 1 ] && args="$args --allow-downgrade"
-		[ "$ALLOW_PROTO" = 1 ] && args="$args --allow-protocol-change"
-		# Same checks, synchronously, so LuCI gets the error.
-		out=$(check_image) || fail "$out"
+		# The detached install repeats every check (as long as verify
+		# takes); a failure ends up in "status" (install_error).
 		: > "$INSTLOG"
 		start-stop-daemon -S -b -m -p "$WORK/install.pid" -x /bin/sh -- \
-			-c "exec $SELF install --yes $args >>$INSTLOG 2>&1"
+			-c "exec $SELF install --yes $(bg_args) >>$INSTLOG 2>&1"
 		json_init; json_add_string status installing; json_dump
 		return 0
 	fi
@@ -598,7 +640,7 @@ post-boot) cmd_post_boot ;;
 prune-list) prune_list ;;
 prune-preview) prune_overlay preview ;;
 *)
-	echo "usage: mixtile-update status|check [--channel rc|stable]|download [--background]|verify|install --yes [--background] [--allow-downgrade] [--allow-protocol-change]|verify-local IMAGE|install-local --yes IMAGE|post-boot|watch|prune-list|prune-preview" >&2
+	echo "usage: mixtile-update status|check [--channel rc|stable]|download [--background]|verify [--background]|install --yes [--background] [--allow-downgrade] [--allow-protocol-change]|verify-local IMAGE|install-local --yes IMAGE|post-boot|watch|prune-list|prune-preview" >&2
 	exit 2
 	;;
 esac

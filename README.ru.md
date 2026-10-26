@@ -269,12 +269,18 @@ mixtile-update check                 # новейший релиз в канал
 mixtile-update download
 mixtile-update verify                # плата, target, версия, протокол OpenMIOP, SHA-256
 mixtile-update install --yes         # чистит overlay, затем sysupgrade
+                                     # --background: в фоне, лог в /tmp/mixtile-update/install.log
 ```
 
 * Источник: GitHub Releases репозитория из `/etc/mixtile-release` (этого);
   поменять: `uci set mixtile-update.main.repository=<owner/repo>`.
 * Каналы: `rc` (кандидаты и финальные релизы) и `stable` (только
   финальные): `uci set mixtile-update.main.channel=stable; uci commit mixtile-update`.
+* **UPDATE в веб-интерфейсе v0.4.1/v0.4.2 может упасть** с
+  `clusterbox.fw_install: ubus status 5` (проверка образа идёт дольше,
+  чем rpcd ждёт ответа); тогда ставьте по SSH: `mixtile-update install
+  --yes --background` (лог в `/tmp/mixtile-update/install.log`).
+  Исправлено в веб-интерфейсе следующего релиза.
 * Автоматически ничего не ставится. Откат и переустановка требуют
   `--allow-downgrade`; релиз с другим протоколом OpenMIOP —
   `--allow-protocol-change` (обновите блейды под него). Сборкам для
