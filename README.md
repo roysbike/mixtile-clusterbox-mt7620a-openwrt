@@ -8,9 +8,10 @@ board, the **BMC** (a MediaTek MT7620A), is on whenever the box has power,
 whatever the blades do. This firmware replaces Mixtile's and turns the
 BMC into the one place from which the whole box is run.
 
-**Current release: [v0.4.1](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.1)**
-(2026-10-22): OpenWrt 25.12.6, Linux 6.12; the BMC firmware of OpenMIOP
-Stack v0.6.0 and v0.6.1. Release notes: [v0.4.1](release-notes/v0.4.1.md),
+**Current release: [v0.4.2](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.2)**
+(2026-10-26): OpenWrt 25.12.6 with the newest 25.12 packages, Linux 6.12;
+the BMC firmware of OpenMIOP Stack v0.6.x and v0.7.0. Release notes:
+[v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
 [v0.4.0](release-notes/v0.4.0.md) ·
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -47,13 +48,13 @@ replacement made of three repositories that are released together:
 | --- | --- | --- |
 | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) | the blade driver `openmiop-ep` (`omi0`), the BMC module `omi-rc`, the Blade 3 board modules | [v0.6.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.1) |
 | [mixtile-talos](https://github.com/roysbike/mixtile-talos) | Talos Linux (Kubernetes) for Blade 3 with openmiop built in | [v0.6.1](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.1) (Talos v1.14.4) |
-| **mixtile-clusterbox-mt7620a-openwrt** (this one) | OpenWrt for the BMC: blade power and consoles, the BMC side of openmiop, the cluster's network edge, web UI, updates | [v0.4.1](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.1) (OpenWrt 25.12.6) |
+| **mixtile-clusterbox-mt7620a-openwrt** (this one) | OpenWrt for the BMC: blade power and consoles, the BMC side of openmiop, the cluster's network edge, web UI, updates | [v0.4.2](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.2) (OpenWrt 25.12.6) |
 
 **Versions.** The firmware has its own version numbers. The BMC side of
 openmiop (`omi-rc` and the fallback helper `openmiop-rc`) is built into
 the firmware from a pinned pcie-ep-net commit (`PKG_SOURCE_VERSION` in
-`package/omi-rc` and `package/openmiop`). v0.4.0 and v0.4.1 pin pcie-ep-net v0.6.0;
-its BMC code is the same as in v0.6.1, which only changed the blade side.
+`package/omi-rc` and `package/openmiop`). v0.4.0 to v0.4.2 pin pcie-ep-net v0.6.0;
+its BMC code is the same as in v0.6.1 and v0.7.0, which only changed the blade side.
 A new firmware release is needed only when the BMC side changes (`omi-rc`,
 the helper, nodectl, the web UI or the OpenWrt base).
 
@@ -134,9 +135,9 @@ pcie-ep-net v0.3).
 | `luci-app-teleport` | installs and runs a Teleport agent (`teleport-<version>-linux-mipsel.gz` from the firmware release) |
 | Tailscale, WireGuard, OpenVPN | remote access, with pages in the web UI (NETWORK → TAILSCALE, WIREGUARD, OPENVPN) and in LuCI |
 
-| v0.4.1 | |
+| v0.4.2 | |
 | --- | --- |
-| OpenWrt / kernel | 25.12.6, Linux 6.12.112 (ramips/mt7620), packages with `apk` |
+| OpenWrt / kernel | 25.12.6, Linux 6.12.112 (ramips/mt7620), packages with `apk`; packages feed and `ca-certificates` at the `openwrt-25.12` branch of 2026-10-26 |
 | OpenMIOP | `omi-rc` and `openmiop-rc` from pcie-ep-net v0.6.0 (protocol v4; push mode, gateway pull, zero-copy) |
 | Works with blades on | pcie-ep-net v0.3.0 and later; gateway pull with v0.4.0, zero-copy with v0.5.0, checksum offload between blades with v0.6.0 |
 | nodectl | 2.0-7 with console archive and probe; never reads the blades' PCIe config space |
