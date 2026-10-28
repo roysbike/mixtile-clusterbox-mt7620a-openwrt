@@ -8,10 +8,10 @@
 питание, что бы ни делали блейды. Эта прошивка заменяет прошивку Mixtile
 и превращает BMC в единое место управления всем шасси.
 
-**Текущий релиз: [v0.4.2](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.2)**
-(2026-10-26): OpenWrt 25.12.6 с новейшими пакетами 25.12, Linux 6.12;
+**Текущий релиз: [v0.4.3](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.3)**
+(2026-10-28): OpenWrt 25.12.6 с новейшими пакетами 25.12, Linux 6.12;
 прошивка BMC для OpenMIOP Stack v0.6.x и v0.7.0. Release notes:
-[v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
+[v0.4.3](release-notes/v0.4.3.md), [v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
 [v0.4.0](release-notes/v0.4.0.md) ·
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -48,14 +48,14 @@ Mixtile поставляет Cluster Box со своей прошивкой BMC 
 | --- | --- | --- |
 | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) | драйвер блейда `openmiop-ep` (`omi0`), модуль BMC `omi-rc`, модули платы Blade 3 | [v0.6.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.1) |
 | [mixtile-talos](https://github.com/roysbike/mixtile-talos) | Talos Linux (Kubernetes) для Blade 3 со встроенным openmiop | [v0.6.1](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.1) (Talos v1.14.4) |
-| **mixtile-clusterbox-mt7620a-openwrt** (этот) | OpenWrt для BMC: питание и консоли блейдов, сторона BMC в openmiop, сетевой край кластера, веб-интерфейс, обновления | [v0.4.2](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.2) (OpenWrt 25.12.6) |
+| **mixtile-clusterbox-mt7620a-openwrt** (этот) | OpenWrt для BMC: питание и консоли блейдов, сторона BMC в openmiop, сетевой край кластера, веб-интерфейс, обновления | [v0.4.3](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.3) (OpenWrt 25.12.6) |
 
 **Версии.** У прошивки свои номера версий. Сторона BMC в openmiop
 (`omi-rc` и запасной помощник `openmiop-rc`) собирается в прошивку из
 закреплённого коммита pcie-ep-net (`PKG_SOURCE_VERSION` в
 `package/omi-rc` и `package/openmiop`). v0.4.0–v0.4.2 закрепляют
-pcie-ep-net v0.6.0; код BMC в нём такой же, как в v0.6.1 и v0.7.0, где поменялась только
-сторона блейдов. Новая прошивка нужна, только когда меняется сторона BMC
+pcie-ep-net v0.6.0 (код BMC в нём такой же, как в v0.6.1 и v0.7.0, где поменялась только
+сторона блейдов); v0.4.3 закрепляет `dd7a7a8`: v0.7.0 плюс исправление fan-in в `omi-rc`. Новая прошивка нужна, только когда меняется сторона BMC
 (`omi-rc`, помощник, nodectl, веб-интерфейс или база OpenWrt).
 
 ## Возможности
@@ -134,10 +134,10 @@ endpoint и подключает сам BMC к `omi0` (10.20.0.1/24) как шл
 | `luci-app-teleport` | ставит и запускает агент Teleport (`teleport-<version>-linux-mipsel.gz` из релиза прошивки) |
 | Tailscale, WireGuard, OpenVPN | удалённый доступ, со страницами в веб-интерфейсе (NETWORK → TAILSCALE, WIREGUARD, OPENVPN) и в LuCI |
 
-| v0.4.2 | |
+| v0.4.3 | |
 | --- | --- |
 | OpenWrt / ядро | 25.12.6, Linux 6.12.112 (ramips/mt7620), пакеты через `apk`; feed packages и `ca-certificates` из ветки `openwrt-25.12` на 2026-10-26 |
-| OpenMIOP | `omi-rc` и `openmiop-rc` из pcie-ep-net v0.6.0 (протокол v4; push-режим, gateway pull, zero-copy) |
+| OpenMIOP | `omi-rc` и `openmiop-rc` из pcie-ep-net `dd7a7a8` (v0.7.0 плюс исправление fan-in; протокол v4; push-режим, gateway pull, zero-copy; completion timeout root port выключен) |
 | Работает с блейдами на | pcie-ep-net v0.3.0 и новее; gateway pull с v0.4.0, zero-copy с v0.5.0, checksum offload между блейдами с v0.6.0 |
 | nodectl | 2.0-7 с архивом консолей и probe; никогда не читает конфиг PCIe блейдов |
 | Агент Teleport | 18.10.0 (файл релиза) |
@@ -280,7 +280,8 @@ mixtile-update install --yes         # чистит overlay, затем sysupgra
   `clusterbox.fw_install: ubus status 5` (проверка образа идёт дольше,
   чем rpcd ждёт ответа); тогда ставьте по SSH: `mixtile-update install
   --yes --background` (лог в `/tmp/mixtile-update/install.log`).
-  Исправлено в веб-интерфейсе следующего релиза.
+  Исправлено в веб-интерфейсе v0.4.3: начиная с неё обновление из
+  веб-интерфейса работает.
 * Автоматически ничего не ставится. Откат и переустановка требуют
   `--allow-downgrade`; релиз с другим протоколом OpenMIOP —
   `--allow-protocol-change` (обновите блейды под него). Сборкам для
