@@ -87,7 +87,9 @@ grep -q 'omi-rc.ko' "$r/etc/init.d/openmiop" || fail "openmiop init does not loa
 strings "$omirc" | grep -q '^parmtype=pull:bool' || fail "omi-rc has no gateway pull (parameter pull)"
 strings "$omirc" | grep -q 'gateway ring head %u, tail %u: resync' || fail "omi-rc older than pcie-ep-net v0.4.0-rc.2 (no credit on ring resync)"
 strings "$omirc" | grep -q '^parmtype=zc:bool' || fail "omi-rc has no gateway zero-copy (parameter zc)"
-ok "omi-rc.ko for $KERNEL_VERSION, with gateway pull, loaded by the openmiop init"
+strings "$omirc" | grep -q '^parmtype=ct_off:bool' || fail "omi-rc leaves the root port completion timeout on (fan-in wedge, pcie-ep-net PR #29)"
+strings "$omirc" | grep -q '^parmtype=link_down_ms:uint' || fail "omi-rc drops blades on a single late LNKSTA read (pcie-ep-net PR #29)"
+ok "omi-rc.ko for $KERNEL_VERSION, with gateway pull and fan-in fix, loaded by the openmiop init"
 grep -q 'flow_offloading=1' "$r/etc/uci-defaults/90-openmiop-flow-offload" 2>/dev/null ||
 	fail "flow offloading default (uci-defaults/90-openmiop-flow-offload) missing"
 ok "firewall flow offloading on by default"

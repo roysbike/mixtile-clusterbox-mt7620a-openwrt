@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-28
+
+v0.4.2 with the fan-in fix in `omi-rc` and the web UI update fix. `omi-rc`
+and `openmiop-rc` from pcie-ep-net `dd7a7a8` (v0.7.0 plus pcie-ep-net PR
+#29; the helper is unchanged). Same OpenWrt base and packages.
+
 ### Fixed
+- `omi-rc`: fan-in load no longer wedges the BMC side of the PCIe fabric.
+  When several blades saturated one blade's switch port, BMC writes into
+  that blade (gateway frames) queued behind the load, the next BMC
+  config read completed late and the MT7620A root port did not recover
+  from the completion timeout: the cluster was unreachable from outside
+  until a BMC reboot (blade-to-blade traffic kept working; seen
+  2026-10-25 and twice 2026-10-27). `omi-rc` now disables the completion
+  timeout on the root port (parameter `ct_off`, dmesg `omi-rc: completion
+  timeout disabled`) and drops a blade only after its switch port reads
+  as down for `link_down_ms` (100 ms); late reads under load return 0 for
+  up to 20 ms and are logged as `link read as down ... up again`.
+  `verify-firmware.sh` checks for both parameters.
 - Web UI firmware update: **UPDATE** failed with `clusterbox.fw_install:
   ubus status 5` and installed nothing. The call verified the image
   twice (SHA-256 over 26 MB, `fwtool`, `sysupgrade -T`; ~30 s each on an
