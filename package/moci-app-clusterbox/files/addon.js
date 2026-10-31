@@ -378,6 +378,9 @@ export default class ClusterBoxAddon {
 		const svc = t.services || [];
 		const svcUp = svc.filter(x => x.up === '1').length;
 		const uplink = (pcie.uplink || '').split('|');
+		// Parts of the fabric an OCuLink host has taken over (firmware with the
+		// mux status only; 'unknown' and older firmware show nothing).
+		const ocu = [pcie.lane0 === 'oculink' && 'PCIe lane 0', pcie.i2c === 'oculink' && 'slot I2C'].filter(Boolean);
 
 		// Cluster head.
 		this.put(this.f(root, 'cname'), info.name || 'Mixtile Cluster Box');
@@ -387,6 +390,7 @@ export default class ClusterBoxAddon {
 		const problems = [];
 		if (states.includes('nolink')) problems.push('bad');
 		if (!pcie.switch) problems.push('bad');
+		if (ocu.length) problems.push('warn');
 		if (states.some(s => s !== 'online') || !t.internet?.up || svcUp < svc.length) problems.push('warn');
 		const overall = problems.includes('bad') ? 'bad' : problems.length ? 'warn' : 'ok';
 		this.level(this.f(root, 'overall'), overall);
@@ -417,7 +421,7 @@ export default class ClusterBoxAddon {
 		const fan = this.f(root, 'fan');
 		this.put(fan, ch.fan_duty != null ? `FAN ${ch.fan_duty}%` : 'FAN');
 		fan.style.setProperty('--cb-fan-s', ch.fan_duty ? `${(2.4 - (ch.fan_duty / 100) * 1.8).toFixed(2)}s` : '0s');
-		this.put(this.f(root, 'sw'), pcie.switch ? `to BMC ${uplink[0] ? `${uplink[0].replace(' PCIe', '')} x${uplink[1]}` : ''} · ${nodes.filter(n => n.pcie_link).length}/4 blade links` : 'not found');
+		this.put(this.f(root, 'sw'), pcie.switch ? `to BMC ${uplink[0] ? `${uplink[0].replace(' PCIe', '')} x${uplink[1]}` : ''} · ${nodes.filter(n => n.pcie_link).length}/4 blade links${ocu.length ? ` · OCuLink owns ${ocu.join(' + ')}` : ''}` : 'not found');
 		this.level(root.querySelector('.cb-backplane'), pcie.switch ? 'ok' : 'bad');
 
 		// Blade bays.
@@ -471,7 +475,7 @@ export default class ClusterBoxAddon {
 		};
 		const worst = states.includes('nolink') ? 'bad' : states.some(s => s !== 'online') ? 'warn' : 'ok';
 		h('nodes', worst, `${online}/4 online · ${nodes.filter(n => n.pcie_link).length}/4 PCIe`);
-		h('fabric', !pcie.switch ? 'bad' : pcie.omi0 ? 'ok' : 'warn', pcie.switch ? (pcie.omi0 ? `omi0 up · ${pcie.omi_driver}` : 'omi0 down') : 'no switch');
+		h('fabric', !pcie.switch ? 'bad' : pcie.omi0 && !ocu.length ? 'ok' : 'warn', pcie.switch ? `${pcie.omi0 ? `omi0 up · ${pcie.omi_driver}` : 'omi0 down'}${ocu.length ? ` · OCuLink owns ${ocu.join(' + ')}` : ''}` : 'no switch');
 		h('inet', t.internet?.up ? 'ok' : 'bad', t.internet?.up ? `${Math.round(t.internet.rtt_ms)} ms` : 'unreachable');
 		h('wan', wan.up ? 'ok' : wan.fallback ? 'warn' : 'bad', wan.up ? `${wan.proto || ''} ${wan.ipaddr || ''}`.trim() : wan.fallback ? `fallback ${wan.fallback}` : 'down');
 		h('svc', !svc.length ? 'off' : svcUp === svc.length ? 'ok' : svcUp ? 'warn' : 'bad', svc.length ? `${svcUp}/${svc.length} up` : 'none');

@@ -49,6 +49,30 @@
 			gpio-export,output = <1>;
 			gpios = <&gpio2 30 GPIO_ACTIVE_HIGH>;
 		};
+
+		/* Read-only status of the OCuLink muxes (V120 schematic): the
+		 * SEL nets are pulled up (1 = MT7620A) and pulled low by the
+		 * OCuLink cable (CWAKEB#) or by these pins driven low. Exported
+		 * as inputs only: never drive them while a host may pull
+		 * CWAKEB# low.
+		 */
+		SEL_PCIE {
+			/* U8/U9: switch upstream lane 0 and refclk */
+			gpio-export,name = "sel_pcie";
+			gpios = <&gpio2 29 GPIO_ACTIVE_HIGH>;
+		};
+
+		SEL_I2C {
+			/* U14: backplane I2C (slot control) */
+			gpio-export,name = "sel_i2c";
+			gpios = <&gpio2 28 GPIO_ACTIVE_HIGH>;
+		};
+
+		HOTPLUG {
+			/* J4 A19, purpose unknown */
+			gpio-export,name = "hotplug";
+			gpios = <&gpio2 31 GPIO_ACTIVE_HIGH>;
+		};
 	};
 
 	/* Fans: software PWM on GPIO (Linux pwm-gpio), one chip per fan:

@@ -73,6 +73,16 @@ netdev_bytes() {
 	echo "$(cat /sys/class/net/$1/statistics/rx_bytes 2>/dev/null || echo 0) $(cat /sys/class/net/$1/statistics/tx_bytes 2>/dev/null || echo 0)"
 }
 
+# Owner of an OCuLink mux from its SEL net (exported read-only in the DTS):
+# 1 = the MT7620A (pull-up), 0 = the OCuLink cable or a pin driven low.
+mux_owner() {
+	case "$(cat /sys/class/gpio/$1/value 2>/dev/null)" in
+		1) echo bmc ;;
+		0) echo oculink ;;
+		*) echo unknown ;;
+	esac
+}
+
 topology() {
 	local ip gw dev up proto sub fb link rx tx inet ts ts_ip sw slink nodes base s dip dport
 
@@ -143,6 +153,8 @@ topology() {
 		*) json_add_boolean omi0 0 ;;
 	esac
 	json_add_string omi_driver "$([ -d /sys/module/omi_rc ] && echo omi-rc || { pidof openmiop-rc >/dev/null && echo openmiop-rc; })"
+	json_add_string lane0 "$(mux_owner sel_pcie)"
+	json_add_string i2c "$(mux_owner sel_i2c)"
 	read -r rx tx <<-EOF
 		$(netdev_bytes omi0)
 	EOF
