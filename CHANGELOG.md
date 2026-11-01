@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-01
+
+v0.4.3 with the OCuLink status in the web UI. `omi-rc` and `openmiop-rc`
+from the pcie-ep-net v0.7.1 tag (`0566ec3`; same BMC code as `dd7a7a8`).
+Same OpenWrt base and packages.
+
 ### Added
 - Web UI: OCuLink status. The V120 control board routes switch upstream
   lane 0 (with its reference clock) and the backplane I2C (slot control)
@@ -18,6 +24,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `OCuLink owns PCIe lane 0` / `slot I2C` as a warning on the backplane
   and in the PCIe fabric health line. The firmware never drives these
   pins.
+
+### Changed
+- `omi-rc` and `openmiop` pinned to the pcie-ep-net v0.7.1 tag
+  (`0566ec3`, package versions 0.7.1-r1). The BMC code is the same as in
+  `dd7a7a8` (v0.4.3); v0.7.1 changed only `blade3-nvme-recover` on the
+  blades.
 
 ## [0.4.3] - 2026-10-28
 
