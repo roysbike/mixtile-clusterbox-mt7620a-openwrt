@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Web UI: OCuLink status. The V120 control board routes switch upstream
+  lane 0 (with its reference clock) and the backplane I2C (slot control)
+  through muxes that an OCuLink host takes over by pulling `CWAKEB#` on
+  the cable low. The mux select lines (GPIO 69 `SEL_PCIE_USB`, GPIO 68
+  `SEL_I2C`) and `HOTPLUG` (GPIO 71) are exported read-only as
+  `/sys/class/gpio/sel_pcie`, `sel_i2c` and `hotplug` (1 = BMC, 0 =
+  OCuLink); `ubus call clusterbox topology` reports `pcie.lane0` and
+  `pcie.i2c` (`bmc`, `oculink` or `unknown`), and the cluster page shows
+  `OCuLink owns PCIe lane 0` / `slot I2C` as a warning on the backplane
+  and in the PCIe fabric health line. The firmware never drives these
+  pins.
+
 ## [0.4.3] - 2026-10-28
 
 v0.4.2 with the fan-in fix in `omi-rc` and the web UI update fix. `omi-rc`
