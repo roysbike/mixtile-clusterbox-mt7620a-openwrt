@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-23
+
+v0.4.4 on the head of the OpenWrt `openwrt-25.12` branch (no v25.12.7 tag
+yet) with the feeds of 2026-11-21. Same BMC code (`omi-rc`/`openmiop-rc`
+from pcie-ep-net v0.7.1).
+
+### Changed
+- OpenWrt base: `openwrt-25.12` at `6ad88cfb33` (81 commits after
+  v25.12.6): Linux 6.12.112 → 6.12.116; ramips/mt7620 keeps kernel and
+  module code out of the first 32 KiB of a segment (MIPS 24K EPC
+  erratum), drops the per-call-site JAL workarounds and enables
+  `CONFIG_LIST_HARDENED` again; musl regcomp integer overflow fixes;
+  ucode, libubox, uhttpd, rpcd, fstools, dnsmasq, ca-certificates,
+  px5g-mbedtls updates.
+- Feeds `packages` (`7079258`) and `luci` (`92d84fc3`) at their
+  `openwrt-25.12` heads of 2026-11-21.
+- The image reports OpenWrt `25.12-SNAPSHOT` (upstream removes the
+  `version` file after a release tag), the apk repositories point to
+  `releases/25.12-SNAPSHOT`, the image file name carries `openwrt-25.12`.
+
+### Fixed
+- Build: dnsdist, knot-resolver, snort3 and openappid are kept out of the
+  tree. With `@!riscv64` on luajit (openwrt/packages `aea49e65a`) they
+  depend on themselves in Kconfig, and defconfig dropped luci.
+
 ## [0.4.4] - 2026-11-01
 
 v0.4.3 with the OCuLink status in the web UI. `omi-rc` and `openmiop-rc`

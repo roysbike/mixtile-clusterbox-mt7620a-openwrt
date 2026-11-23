@@ -29,6 +29,13 @@ function feeds_install()
 	# dependency, and defconfig then drops packages of the image. The
 	# image has no weechat: keep the app out of the tree.
 	./scripts/feeds uninstall luci-app-weechat
+	# openwrt/packages aea49e65a ("luajit: do not build on riscv64") adds
+	# @!riscv64 to luajit. For +luajit (luajit2 provides it)
+	# package-metadata.pl copies luajit's depends into the user under the
+	# condition "PACKAGE_luajit2<PACKAGE_<user>", so dnsdist, knot-resolver,
+	# snort3 and openappid now depend on themselves, and defconfig drops
+	# luci from the image. None of them is in the image.
+	./scripts/feeds uninstall dnsdist knot-resolver snort3 openappid
 }
 
 function choose_target_board()

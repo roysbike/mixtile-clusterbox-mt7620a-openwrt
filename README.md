@@ -8,10 +8,10 @@ board, the **BMC** (a MediaTek MT7620A), is on whenever the box has power,
 whatever the blades do. This firmware replaces Mixtile's and turns the
 BMC into the one place from which the whole box is run.
 
-**Current release: [v0.4.4](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.4)**
-(2026-11-01): OpenWrt 25.12.6 with the newest 25.12 packages, Linux 6.12;
+**Current release: [v0.4.5](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.5)**
+(2026-11-23): OpenWrt 25.12 (branch head after 25.12.6) with the newest 25.12 packages, Linux 6.12;
 the BMC firmware of OpenMIOP Stack v0.6.x and v0.7.x. Release notes:
-[v0.4.4](release-notes/v0.4.4.md), [v0.4.3](release-notes/v0.4.3.md), [v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
+[v0.4.5](release-notes/v0.4.5.md), [v0.4.4](release-notes/v0.4.4.md), [v0.4.3](release-notes/v0.4.3.md), [v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
 [v0.4.0](release-notes/v0.4.0.md) ·
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -48,14 +48,14 @@ replacement made of three repositories that are released together:
 | --- | --- | --- |
 | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) | the blade driver `openmiop-ep` (`omi0`), the BMC module `omi-rc`, the Blade 3 board modules | [v0.6.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.1) |
 | [mixtile-talos](https://github.com/roysbike/mixtile-talos) | Talos Linux (Kubernetes) for Blade 3 with openmiop built in | [v0.6.1](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.1) (Talos v1.14.4) |
-| **mixtile-clusterbox-mt7620a-openwrt** (this one) | OpenWrt for the BMC: blade power and consoles, the BMC side of openmiop, the cluster's network edge, web UI, updates | [v0.4.3](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.4) (OpenWrt 25.12.6) |
+| **mixtile-clusterbox-mt7620a-openwrt** (this one) | OpenWrt for the BMC: blade power and consoles, the BMC side of openmiop, the cluster's network edge, web UI, updates | [v0.4.5](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.5) (OpenWrt 25.12) |
 
 **Versions.** The firmware has its own version numbers. The BMC side of
 openmiop (`omi-rc` and the fallback helper `openmiop-rc`) is built into
 the firmware from a pinned pcie-ep-net commit (`PKG_SOURCE_VERSION` in
 `package/omi-rc` and `package/openmiop`). v0.4.0 to v0.4.2 pin pcie-ep-net v0.6.0
 (its BMC code is the same as in v0.6.1 and v0.7.0, which only changed the blade side);
-v0.4.3 pins `dd7a7a8`, v0.7.0 plus the `omi-rc` fan-in fix; v0.4.4 pins
+v0.4.3 pins `dd7a7a8`, v0.7.0 plus the `omi-rc` fan-in fix; v0.4.4 and v0.4.5 pin
 the v0.7.1 tag (same BMC code).
 A new firmware release is needed only when the BMC side changes (`omi-rc`,
 the helper, nodectl, the web UI or the OpenWrt base).
@@ -137,9 +137,9 @@ pcie-ep-net v0.3).
 | `luci-app-teleport` | installs and runs a Teleport agent (`teleport-<version>-linux-mipsel.gz` from the firmware release) |
 | Tailscale, WireGuard, OpenVPN | remote access, with pages in the web UI (NETWORK → TAILSCALE, WIREGUARD, OPENVPN) and in LuCI |
 
-| v0.4.4 | |
+| v0.4.5 | |
 | --- | --- |
-| OpenWrt / kernel | 25.12.6, Linux 6.12.112 (ramips/mt7620), packages with `apk`; packages feed and `ca-certificates` at the `openwrt-25.12` branch of 2026-10-26 |
+| OpenWrt / kernel | 25.12 (`openwrt-25.12` head `6ad88cfb33`, after 25.12.6), Linux 6.12.116 (ramips/mt7620), packages with `apk`; packages and luci feeds at the `openwrt-25.12` heads of 2026-11-21 |
 | OpenMIOP | `omi-rc` and `openmiop-rc` from pcie-ep-net v0.7.1 (`0566ec3`, with the fan-in fix; protocol v4; push mode, gateway pull, zero-copy; root port completion timeout off) |
 | Works with blades on | pcie-ep-net v0.3.0 and later; gateway pull with v0.4.0, zero-copy with v0.5.0, checksum offload between blades with v0.6.0 |
 | nodectl | 2.0-7 with console archive and probe; never reads the blades' PCIe config space |
@@ -228,7 +228,7 @@ Release assets:
 
 | File | Purpose |
 | --- | --- |
-| `openmiop-<version>-clusterbox-bmc-openwrt-<openwrt>-mipsel-sysupgrade.bin` | the firmware (`<openwrt>` = `25.12.6` from v0.4.0, `23.05` up to v0.3.0), written by sysupgrade to the BMC's eMMC |
+| `openmiop-<version>-clusterbox-bmc-openwrt-<openwrt>-mipsel-sysupgrade.bin` | the firmware (`<openwrt>` = `25.12` from v0.4.5, `25.12.6` from v0.4.0 to v0.4.4, `23.05` up to v0.3.0), written by sysupgrade to the BMC's eMMC |
 | `clusterbox-firmware.json` | board, target, version, commit, OpenMIOP protocol, image SHA-256 (read by `mixtile-update`) |
 | `mixtile-update` | the update tool, for the first install from other firmware |
 | `teleport-<version>-linux-mipsel.gz` (+ `.sha256`) | Teleport agent for `luci-app-teleport` |
