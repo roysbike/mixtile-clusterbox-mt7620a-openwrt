@@ -8,10 +8,10 @@
 питание, что бы ни делали блейды. Эта прошивка заменяет прошивку Mixtile
 и превращает BMC в единое место управления всем шасси.
 
-**Текущий релиз: [v0.4.4](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.4)**
-(2026-11-01): OpenWrt 25.12.6 с новейшими пакетами 25.12, Linux 6.12;
+**Текущий релиз: [v0.4.5](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.5)**
+(2026-11-23): OpenWrt 25.12 (голова ветки после 25.12.6) с новейшими пакетами 25.12, Linux 6.12;
 прошивка BMC для OpenMIOP Stack v0.6.x и v0.7.x. Release notes:
-[v0.4.4](release-notes/v0.4.4.md), [v0.4.3](release-notes/v0.4.3.md), [v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
+[v0.4.5](release-notes/v0.4.5.md), [v0.4.4](release-notes/v0.4.4.md), [v0.4.3](release-notes/v0.4.3.md), [v0.4.2](release-notes/v0.4.2.md), [v0.4.1](release-notes/v0.4.1.md),
 [v0.4.0](release-notes/v0.4.0.md) ·
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -48,14 +48,14 @@ Mixtile поставляет Cluster Box со своей прошивкой BMC 
 | --- | --- | --- |
 | [pcie-ep-net](https://github.com/roysbike/pcie-ep-net) | драйвер блейда `openmiop-ep` (`omi0`), модуль BMC `omi-rc`, модули платы Blade 3 | [v0.6.1](https://github.com/roysbike/pcie-ep-net/releases/tag/v0.6.1) |
 | [mixtile-talos](https://github.com/roysbike/mixtile-talos) | Talos Linux (Kubernetes) для Blade 3 со встроенным openmiop | [v0.6.1](https://github.com/roysbike/mixtile-talos/releases/tag/v0.6.1) (Talos v1.14.4) |
-| **mixtile-clusterbox-mt7620a-openwrt** (этот) | OpenWrt для BMC: питание и консоли блейдов, сторона BMC в openmiop, сетевой край кластера, веб-интерфейс, обновления | [v0.4.3](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.4) (OpenWrt 25.12.6) |
+| **mixtile-clusterbox-mt7620a-openwrt** (этот) | OpenWrt для BMC: питание и консоли блейдов, сторона BMC в openmiop, сетевой край кластера, веб-интерфейс, обновления | [v0.4.5](https://github.com/roysbike/mixtile-clusterbox-mt7620a-openwrt/releases/tag/v0.4.5) (OpenWrt 25.12) |
 
 **Версии.** У прошивки свои номера версий. Сторона BMC в openmiop
 (`omi-rc` и запасной помощник `openmiop-rc`) собирается в прошивку из
 закреплённого коммита pcie-ep-net (`PKG_SOURCE_VERSION` в
 `package/omi-rc` и `package/openmiop`). v0.4.0–v0.4.2 закрепляют
 pcie-ep-net v0.6.0 (код BMC в нём такой же, как в v0.6.1 и v0.7.0, где поменялась только
-сторона блейдов); v0.4.3 закрепляет `dd7a7a8`: v0.7.0 плюс исправление fan-in в `omi-rc`; v0.4.4 закрепляет тег v0.7.1 (тот же код BMC). Новая прошивка нужна, только когда меняется сторона BMC
+сторона блейдов); v0.4.3 закрепляет `dd7a7a8`: v0.7.0 плюс исправление fan-in в `omi-rc`; v0.4.4 и v0.4.5 закрепляют тег v0.7.1 (тот же код BMC). Новая прошивка нужна, только когда меняется сторона BMC
 (`omi-rc`, помощник, nodectl, веб-интерфейс или база OpenWrt).
 
 ## Возможности
@@ -134,9 +134,9 @@ endpoint и подключает сам BMC к `omi0` (10.20.0.1/24) как шл
 | `luci-app-teleport` | ставит и запускает агент Teleport (`teleport-<version>-linux-mipsel.gz` из релиза прошивки) |
 | Tailscale, WireGuard, OpenVPN | удалённый доступ, со страницами в веб-интерфейсе (NETWORK → TAILSCALE, WIREGUARD, OPENVPN) и в LuCI |
 
-| v0.4.4 | |
+| v0.4.5 | |
 | --- | --- |
-| OpenWrt / ядро | 25.12.6, Linux 6.12.112 (ramips/mt7620), пакеты через `apk`; feed packages и `ca-certificates` из ветки `openwrt-25.12` на 2026-10-26 |
+| OpenWrt / ядро | 25.12 (голова `openwrt-25.12` `6ad88cfb33`, после 25.12.6), Linux 6.12.116 (ramips/mt7620), пакеты через `apk`; feeds packages и luci из голов `openwrt-25.12` на 2026-11-21 |
 | OpenMIOP | `omi-rc` и `openmiop-rc` из pcie-ep-net v0.7.1 (`0566ec3`, с исправлением fan-in; протокол v4; push-режим, gateway pull, zero-copy; completion timeout root port выключен) |
 | Работает с блейдами на | pcie-ep-net v0.3.0 и новее; gateway pull с v0.4.0, zero-copy с v0.5.0, checksum offload между блейдами с v0.6.0 |
 | nodectl | 2.0-7 с архивом консолей и probe; никогда не читает конфиг PCIe блейдов |
@@ -222,7 +222,7 @@ UART, 1,5 Мбод) записывается `nodectl consoled` на eMMC BMC, �
 
 | Файл | Для чего |
 | --- | --- |
-| `openmiop-<version>-clusterbox-bmc-openwrt-<openwrt>-mipsel-sysupgrade.bin` | прошивка (`<openwrt>` = `25.12.6` с v0.4.0, `23.05` до v0.3.0), sysupgrade пишет её на eMMC BMC |
+| `openmiop-<version>-clusterbox-bmc-openwrt-<openwrt>-mipsel-sysupgrade.bin` | прошивка (`<openwrt>` = `25.12` с v0.4.5, `25.12.6` с v0.4.0 по v0.4.4, `23.05` до v0.3.0), sysupgrade пишет её на eMMC BMC |
 | `clusterbox-firmware.json` | плата, target, версия, коммит, протокол OpenMIOP, SHA-256 образа (читает `mixtile-update`) |
 | `mixtile-update` | инструмент обновления, для первой установки с другой прошивки |
 | `teleport-<version>-linux-mipsel.gz` (+ `.sha256`) | агент Teleport для `luci-app-teleport` |
