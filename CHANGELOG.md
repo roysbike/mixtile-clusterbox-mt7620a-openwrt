@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- clusterbox `apply`: the blade DHCP pool on omi0 went to the dhcp section
+  of an interface named `openmiop` even when the omi0 interface has
+  another name. On a box that came from the Mixtile firmware with its
+  settings, 80-clusterbox-network keeps the vendor name `eth_pci`, so
+  dnsmasq handed out no addresses on omi0. The pool now goes to the
+  interface whose device is `omi0`; a stale `dhcp.openmiop` without a
+  `network.openmiop` is removed. Boxes with the `openmiop` interface
+  (fresh installs, the lab BMC) are unchanged.
+
 ## [0.4.5] - 2026-11-23
 
 v0.4.4 on the head of the OpenWrt `openwrt-25.12` branch (no v25.12.7 tag

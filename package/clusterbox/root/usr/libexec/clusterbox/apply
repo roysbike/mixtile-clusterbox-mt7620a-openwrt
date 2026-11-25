@@ -117,8 +117,19 @@ apply_admin() {
 	[ "$before" = "$after" ] || mark firewall
 }
 
+# Network interface on omi0: "openmiop" from the ClusterBox defaults, or
+# the vendor name that 80-clusterbox-network keeps (eth_pci) on a box
+# that came from the Mixtile firmware with its settings.
+omi_iface() {
+	local s
+	for s in $(uci -q show network | sed -n 's/^network\.\([^.=]*\)=interface$/\1/p'); do
+		[ "$(uci -q get "network.$s.device")" = omi0 ] && { echo "$s"; return 0; }
+	done
+	echo openmiop
+}
+
 apply_dns() {
-	local en domain servers recs d before after s n name ip nlist
+	local en domain servers recs d before after s n name ip nlist oif ds
 
 	en=$(cb dns enabled 1)
 	domain=$(cb dns domain cluster)
@@ -141,16 +152,34 @@ apply_dns() {
 	# DHCP for the fabric: addresses for anything without a static one
 	# (the blades and the MetalLB/API addresses are static), the BMC as
 	# gateway, DNS server and NTP server (option 42).
+	# The pool goes on the dhcp section of the omi0 interface, whatever
+	# its name (a section for a missing interface serves nothing).
+	oif=$(omi_iface)
+	ds=
+	for s in $(uci -q show dhcp | sed -n 's/^dhcp\.\([^.=]*\)=dhcp$/\1/p'); do
+		[ "$(uci -q get "dhcp.$s.interface")" = "$oif" ] && { ds=$s; break; }
+	done
+	# Firmware up to v0.4.5 wrote dhcp.openmiop for the interface
+	# "openmiop" even where omi0 is eth_pci: drop it.
+	if [ "$oif" != openmiop ] && [ "$ds" != openmiop ] &&
+	   [ "$(uci -q get dhcp.openmiop.interface)" = openmiop ] &&
+	   ! uci -q get network.openmiop >/dev/null; then
+		udel dhcp.openmiop
+	fi
 	if [ "$en" = 1 ] && [ "$(cb dns dhcp 1)" = 1 ]; then
-		uci -q get dhcp.openmiop >/dev/null || { uci -q set dhcp.openmiop=dhcp; mark dhcp; }
-		uset dhcp.openmiop.interface openmiop
-		uset dhcp.openmiop.ignore 0
-		uset dhcp.openmiop.start "$(cb dns dhcp_start 20)"
-		uset dhcp.openmiop.limit "$(cb dns dhcp_limit 80)"
-		uset dhcp.openmiop.leasetime "$(cb dns dhcp_lease 12h)"
-		ulist dhcp.openmiop.dhcp_option "42,10.20.0.1"
-	elif uci -q get dhcp.openmiop >/dev/null; then
-		uset dhcp.openmiop.ignore 1
+		if [ -z "$ds" ]; then
+			ds=$oif
+			uci -q set "dhcp.$ds=dhcp"
+			mark dhcp
+		fi
+		uset "dhcp.$ds.interface" "$oif"
+		uset "dhcp.$ds.ignore" 0
+		uset "dhcp.$ds.start" "$(cb dns dhcp_start 20)"
+		uset "dhcp.$ds.limit" "$(cb dns dhcp_limit 80)"
+		uset "dhcp.$ds.leasetime" "$(cb dns dhcp_lease 12h)"
+		ulist "dhcp.$ds.dhcp_option" "42,10.20.0.1"
+	elif [ -n "$ds" ]; then
+		uset "dhcp.$ds.ignore" 1
 	fi
 
 	nlist=$(uci -q get "$d.notinterface" | tr ' ' '\n' | grep -vx omi0 | tr '\n' ' ')
